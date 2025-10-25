@@ -40,17 +40,21 @@ class TcvaeWrapper(nn.Module):
         self.latent_dim = int(latent_dim) # dimensão do espaço latente
 
         # métodos e atributos registrados para compatibilidade com torch.ts
-        self._methods = ["forward", "steps", "forwardz"]
-        self._attributes = ["forward_input_shape", "forward_output_shape", "steps", "latent_dim"] 
+        self._methods = ["forward", "steps", "forwardz", "latent"]
+        self._attributes = ["forward_input_shape", "forward_output_shape", "forwardz_input_shape", "forwardz_output_shape", "steps", "latent_dim"]
         
         # buffers
         self.register_buffer("max_input_length", torch.tensor(0, dtype=torch.int32)) # tamanho de entrada fixo (não usado)
         self.register_buffer("max_output_length", torch.tensor(int(self.max_length*self.target_features), dtype=torch.int32)) # tamanho máximo de saída
         self.register_buffer("latent_dim_buf", torch.tensor(self.latent_dim, dtype=torch.int32)) # dimensão do espaço latente
+        self.register_buffer("z_buffer", torch.zeros(self.latent_dim, dtype=torch.float32))
+        self.register_buffer("z", torch.tensor(0, dtype=torch.int32))
          
         # shapes de entrada/saída para torch.ts
         self.forward_input_shape = [self.frames*self.input_features] # entrada achatada [N] onde N == frames * input_features
         self.forward_output_shape = [self.max_length*self.target_features] # saída achatada [M] onde M == max_length * target_features
+        self.forwardz_input_shape = [self.frames*self.input_features, self.latent_dim] # entrada achatada + z [N,K]
+        self.forwardz_output_shape = [self.max_length*self.target_features] # saída achatada
 
         # final linear layer
         proj = None
@@ -85,6 +89,19 @@ class TcvaeWrapper(nn.Module):
             self.forward_output_shape[0] = new_val
         else:
             self.forward_output_shape.append(new_val)
+
+    @torch.jit.export
+    def latent(self, z_in: torch.Tensor):
+        """recebe z externamente e armazena no buffer"""
+        if z_in.dim() == 2 and z_in.size(0) == 1:
+            z_in = z_in.squeeze(0)
+        if z_in.numel() != self.latent_dim:
+            raise RuntimeError("z length mismatch")
+        # copia valores para o buffer
+        self.z_buffer.copy_(z_in)
+        # marca que z foi definido
+        self.z.fill_(1)
+        return self.z_buffer
 
     def generate(self, enc_out: torch.Tensor, z: torch.Tensor, start_vectors: torch.Tensor, max_length: int) -> torch.Tensor:
         """
@@ -175,7 +192,7 @@ class TcvaeWrapper(nn.Module):
 
 
     @torch.jit.export
-    def forwardz(self, src: torch.Tensor, z_in: torch.Tensor) -> torch.Tensor:
+    def forwardz(self, src: torch.Tensor) -> torch.Tensor:
         """
         Método 'forwardz' exposto para o torch.ts (Geração controlada passando 'z' junto com a entrada).
         entrada:
@@ -191,8 +208,11 @@ class TcvaeWrapper(nn.Module):
         # 1. faz reshape da entrada para (1, frames, input_features)
         src = src.view(B, self.frames, self.input_features)
 
-        # 2. faz reshape de z_in para (1, latent_dim)
-        z = z_in.view(B, self.latent_dim)
+        # 2. lê z armazenado em z_buffer: usa buffer armazenado se definido, caso contrário gera z aleatório
+        if int(self.z.item()) == 1:
+            z = self.z_buffer.unsqueeze(0)  # (1, latent_dim)
+        else:
+            z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)
         
         # 3. Gera Contexto a partir das features de entrada
         enc_out = self.transformer.conditional_encoder(src, None)
@@ -259,7 +279,7 @@ if __name__ == "__main__":
     scripted_wrapper = torch.jit.script(wrapper)
 
     # 5. Salva o modelo TorchScript
-    output_path = os.path.join(MODEL_DIR, "transformer_cvae.ts")
+    output_path = os.path.join(MODEL_DIR, "tc-vae.ts")
     scripted_wrapper.save(output_path)
     print(f"Torchscript C-VAE salvo em {output_path}")
 
@@ -294,8 +314,9 @@ if __name__ == "__main__":
     # --- Teste 2: 'forwardz' (Geração Controlada) ---
     print("\n------ Teste 'forwardz' (z controlado) ------")
     loaded_model.steps(50) # seta max_length para 50
+    loaded_model.latent(dummy_z) # seta z controlado
     with torch.no_grad():
-        out_flat_z = loaded_model.forwardz(flat_src, dummy_z)
+        out_flat_z = loaded_model.forwardz(flat_src)
     
     n_frames_out_z = int(loaded_model.max_output_length.item()) // TARGET_FEATURES
     out3_z = out_flat_z.view(1, n_frames_out_z, TARGET_FEATURES)
