@@ -95,7 +95,11 @@ def create_audio_metadata_csv(audio_dir, output_path=None):
         filename = path_obj.name
         folder_name = path_obj.parent.name
         label = folder_to_label[folder_name]
-        
+        try:
+            relative_path = str(path_obj.relative_to(audio_dir))
+        except Exception:
+            relative_path = os.path.relpath(file_path, start=audio_dir)
+
         # Extrai metadados do áudio (agora incluindo canais)
         sample_rate, duration_samples, duration_ms, channels = extract_audio_metadata(file_path)
         
@@ -108,11 +112,59 @@ def create_audio_metadata_csv(audio_dir, output_path=None):
             'duration_samples': duration_samples,
             'duration_ms': duration_ms,
             'channels': channels,  # ← Nova coluna
-            'full_path': file_path
+            'path': relative_path
         })
-    
+
     # Cria DataFrame
     df = pd.DataFrame(metadata_list)
+
+    print("\nIniciando processo de sub-amostragem...")
+
+    # Define os grupos com base na nossa última conversa
+    # (baseado na sua distribuição de arquivos)
+    GROUP_2_BASELINE = [
+        'jet_whistle', 'harmonic_fingering', 'crescendo_to_decrescendo',
+        'note_lasting', 'staccato', 'tongue_ram-pizz', 'crescendo',
+        'decrescendo', 'flatterzunge_to_ordinario', 
+        'ordinario_to_flatterzunge', 'multiphonics'
+    ]
+
+    # Calcula as contagens de arquivos por pasta
+    class_counts = df['folder'].value_counts()
+    
+    # Encontra a contagem alvo (target_count)
+    # A meta é o menor número de arquivos de uma classe do "Grupo 2"
+    baseline_counts = class_counts[class_counts.index.isin(GROUP_2_BASELINE)]
+    
+    if baseline_counts.empty:
+        print("Aviso: Nenhuma das classes da 'Linha de Base' foi encontrada.")
+        print("Sub-amostragem não será aplicada.")
+        target_count = -1 # Flag para pular amostragem
+    else:
+        target_count = baseline_counts.min()
+        print(f"Contagem alvo para sub-amostragem: {target_count} (baseado em '{baseline_counts.idxmin()}' - a menor classe do Grupo 2)")
+
+    balanced_df_list = []
+    
+    if target_count > 0:
+        for folder, count in class_counts.items():
+            folder_df = df[df['folder'] == folder]
+            
+            # Se a classe tem mais arquivos que o alvo, sub-amostra
+            if count > target_count:
+                print(f"Sub-amostrando '{folder}' de {count} para {target_count} arquivos...")
+                sampled_df = folder_df.sample(n=target_count, random_state=42)
+                balanced_df_list.append(sampled_df)
+            else:
+                # Se for menor ou igual, mantém todos os arquivos
+                print(f"Mantendo '{folder}' com {count} arquivos.")
+                balanced_df_list.append(folder_df)
+        
+        # Concatena os DataFrames balanceados
+        df = pd.concat(balanced_df_list)
+        print("Sub-amostragem concluída.")
+    
+    
     
     # APLICA SHUFFLE para randomizar a ordem dos arquivos
     print("\nAplicando shuffle aos dados...")
@@ -132,7 +184,7 @@ def analyze_dataset_statistics(df):
     """
     Analisa e exibe estatísticas do dataset (atualizada para incluir canais).
     """
-    print("\n=== ESTATÍSTICAS DO DATASET ===")
+    print("\n=== ESTATÍSTICAS DO DATASET (PÓS-AMOSTRAGEM) ===")
     
     # Estatísticas gerais
     print(f"Total de arquivos: {len(df)}")
