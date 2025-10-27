@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from typing import Tuple, Optional
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, TensorDataset
 # Importa o modelo C-VAE
 from TCVAEmodel import TransformerCVAE
 
@@ -13,7 +13,7 @@ from TCVAEmodel import TransformerCVAE
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(DIRECTORY, "TorchScript")
 CHECKPOINT_DIR = os.path.join(MODEL_DIR, "Checkpoints")
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+DATASET_DIR = os.path.join(DIRECTORY, 'dataset') 
 
 # Configs
 EPOCHS = 100
@@ -23,7 +23,7 @@ LR = 1e-3
 
 # parameters
 INPUT_FEATURES = 64  # features de entrada
-TARGET_FEATURES = 5  # features alvo
+TARGET_FEATURES = 20  # features alvo
 SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 100 # número máximo de passos temporais
 
@@ -50,6 +50,47 @@ class DummyFeatureDataset(Dataset):
         src = torch.randn(self.seq_len, self.in_features)
         tgt = torch.randn(self.seq_len, self.out_features)
         return src, tgt
+    
+# carrega o dataset salvo em arquivos .pt
+def load_pytorch_dataset(data_dir):
+    """Carrega os tensores .pt e cria um TensorDataset."""
+    print(f"Carregando dataset de {data_dir}...")
+    src_path = os.path.join(data_dir, 'train_src.pt')
+    tgt_path = os.path.join(data_dir, 'train_tgt.pt')
+    # label_path = os.path.join(data_dir, 'train_labels.pt') # se precisar dos labels
+
+    try:
+        # Carrega os tensores para a CPU primeiro para evitar problemas de memória GPU
+        src_tensor = torch.load(src_path, map_location='cpu')
+        tgt_tensor = torch.load(tgt_path, map_location='cpu')
+        # labels_tensor = torch.load(label_path, map_location='cpu') # Carrega se precisar
+
+        print("Tensores carregados com sucesso.")
+        print(f"  SRC shape: {src_tensor.shape}")
+        print(f"  TGT shape: {tgt_tensor.shape}")
+
+        # Verifica se os shapes são consistentes
+        if src_tensor.shape[0] != tgt_tensor.shape[0]:
+            raise ValueError("Erro: SRC e TGT têm número diferente de amostras!")
+        if src_tensor.shape[1] != SEQ_LEN or src_tensor.shape[2] != INPUT_FEATURES:
+             print(f"Aviso: Shape do SRC {src_tensor.shape} não bate com SEQ_LEN/INPUT_FEATURES ({SEQ_LEN}, {INPUT_FEATURES})")
+        if tgt_tensor.shape[1] != SEQ_LEN or tgt_tensor.shape[2] != TARGET_FEATURES:
+             print(f"Aviso: Shape do TGT {tgt_tensor.shape} não bate com SEQ_LEN/TARGET_FEATURES ({SEQ_LEN}, {TARGET_FEATURES})")
+
+
+        # Cria o TensorDataset
+        # Nota: O DataLoader moverá os batches para o DEVICE correto durante o treino
+        dataset = TensorDataset(src_tensor, tgt_tensor)
+        return dataset
+
+    except FileNotFoundError as e:
+        print(f"Erro Crítico: Arquivo .pt não encontrado. Verifique o DATASET_DIR.")
+        print(f"Tentativa de carregar: {e.filename}")
+        print("Certifique-se que o script TCVAEdataset.py foi executado com sucesso.")
+        exit(1)
+    except Exception as e:
+        print(f"Erro ao carregar ou criar TensorDataset: {e}")
+        exit(1)
 
 # calculo da função de perda ELBO - Evidence Lower Bound
 def _calculate_loss(real: torch.Tensor, pred: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, beta: float) -> torch.Tensor:
@@ -127,16 +168,20 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
 
 if __name__ == "__main__":
     # 1. prepare datasets (dummy for now)
-    print(f"Preparando dataset fictício (DummyFeatureDataset)...")
-    dataset = DummyFeatureDataset(
-        num_samples=1000, # 1000 train samples
-        seq_len=SEQ_LEN,
-        in_features=INPUT_FEATURES,
-        out_features=TARGET_FEATURES
-    )
+    # print(f"Preparando dataset fictício (DummyFeatureDataset)...")
+    # dataset = DummyFeatureDataset(
+    #     num_samples=1000, # 1000 train samples
+    #     seq_len=SEQ_LEN,
+    #     in_features=INPUT_FEATURES,
+    #     out_features=TARGET_FEATURES
+    #)
+
+    print(f"Carregando dataset dos arquivos .pt em '{DATASET_DIR}'...")
+    dataset = load_pytorch_dataset(DATASET_DIR)
+    
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
-    print(f"Dataset criado com {len(dataset)} amostras.")
- 
+    print(f"Dataset carregado com {len(dataset)} amostras.")
+
     # 2. model (Instancia TransformerCVAE)
     model = TransformerCVAE(
         num_layers_enc=2, # Camadas para os encoders

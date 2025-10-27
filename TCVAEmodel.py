@@ -509,11 +509,11 @@ if __name__ == "__main__":
     d_ff = 128
 
     # Parâmetros
-    input_features = 128  # features de entrada (melspectrograma, centroid, inarmonicidade, etc.)
-    target_features = 32   # features alvo (cents, amp, grain_size, metro, duration, etc)
+    input_features = 64  # features de entrada (melspectrograma, centroid, inarmonicidade, etc.)
+    target_features = 20   # features alvo (cents, amp, grain_size, metro, duration, etc)
     latent_dim = 32      # Dimensão do espaço latente
     max_pos = 100        # número máximo de passos previstos (para embeddings posicional)
-    seq_len = 20         # número de passos de tempo (frames/events)
+    seq_len = 10         # número de passos de tempo (frames/events)
 
     # cria o modelo transformer C-VAE
     model = TransformerCVAE(
