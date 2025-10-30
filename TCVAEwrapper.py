@@ -38,7 +38,7 @@ class TcvaeWrapper(nn.Module):
         self.target_features = int(target_features) # número de features de saída
         self.frames = int(frames) # tamanho da sequência de entrada
         self.latent_dim = int(latent_dim) # dimensão do espaço latente
-
+ 
         # métodos e atributos registrados para compatibilidade com torch.ts
         self._methods = ["forward", "steps", "forwardz", "latent"]
         self._attributes = ["forward_input_shape", "forward_output_shape", "forwardz_input_shape", "forwardz_output_shape", "steps", "latent_dim"]
@@ -53,7 +53,7 @@ class TcvaeWrapper(nn.Module):
         # shapes de entrada/saída para torch.ts
         self.forward_input_shape = [self.frames*self.input_features] # entrada achatada [N] onde N == frames * input_features
         self.forward_output_shape = [self.max_length*self.target_features] # saída achatada [M] onde M == max_length * target_features
-        self.forwardz_input_shape = [self.frames*self.input_features, self.latent_dim] # entrada achatada + z [N,K]
+        self.forwardz_input_shape = [self.frames*self.input_features] # entrada achatada + z [N,K]
         self.forwardz_output_shape = [self.max_length*self.target_features] # saída achatada
 
         # final linear layer
@@ -91,7 +91,7 @@ class TcvaeWrapper(nn.Module):
             self.forward_output_shape.append(new_val)
 
     @torch.jit.export
-    def latent(self, z_in: torch.Tensor):
+    def latent(self, z_in: torch.Tensor) -> torch.Tensor:
         """recebe z externamente e armazena no buffer"""
         if z_in.dim() == 2 and z_in.size(0) == 1:
             z_in = z_in.squeeze(0)
@@ -233,7 +233,7 @@ if __name__ == "__main__":
     # 1. Parâmetros
     INPUT_FEATURES = 64  # número de features de entrada
     TARGET_FEATURES = 20   # número de features de saída
-    SEQ_LEN = 10          # comprimento da sequência de entrada
+    SEQ_LEN = 20          # comprimento da sequência de entrada
     MAX_POS = 100         # posição máxima para o codificador
     LATENT_DIM = 32       # dimensão do espaço latente
 

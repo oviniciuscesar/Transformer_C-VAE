@@ -40,7 +40,7 @@ MELSPEC_PARAMS = {
 }
 
 # Parâmetros do Modelo (targets)
-N_FRAMES = 10       # 10 frames de melspectrograma
+N_FRAMES = 20       # 20 frames de melspectrograma
 N_PITCHES = 7       # 7 notas
 N_AMPS = 7          # 7 amplitudes
 N_TEXTURE_PARAMS = 6 # 4 (metros) + 1 (grão) + 1 (âmbito) = 6
@@ -60,15 +60,15 @@ MEL_FREQS_HZ = librosa.mel_frequencies(
 # !!! IMPORTANTE: ajustar com base nas heurísticas dos targets !!!
 NORMALIZATION_RANGES = {
     # Features 0-6: Pitches (MIDI Cents)
-    'pitch': {'min': 6000.0, 'max': 8400.0}, # duas oitavas
+    'pitch': {'min': 6000.0, 'max': 9600.0}, # três oitavas
     # Features 7-13: Amplitudes (MIDI Velocity)
     'amp': {'min': 0.0, 'max': 127.0},
     # Features 14-17: Metrônomos (ms)
-    'metro': {'min': 100, 'max': 5000.0}, # 
+    'metro': {'min': 10, 'max': 8000.0}, # 
     # Feature 18: Grain Size (ms)
-    'grain': {'min': 50.0, 'max': 1500.0}, # 
+    'grain': {'min': 10.0, 'max': 2500.0}, # 
     # Feature 19: Âmbito
-    'ambito': {'min': -1.0, 'max': 1.0}
+    'ambito': {'min': -100, 'max': 100}
 }
 
 # Cria tensores com os valores min/max para normalização
@@ -188,6 +188,18 @@ def calculate_spectral_centroid(power_spectrum: torch.Tensor, mel_freqs_hz: np.n
     centroid_hz = weighted_sum / total_power
     return centroid_hz
 
+def calculate_spec_kurtosis(power_spectrum: torch.Tensor, mel_freqs_hz: np.ndarray, epsilon=1e-10) -> torch.Tensor:
+    power_spectrum = power_spectrum + epsilon 
+    mel_freqs_tensor = torch.tensor(mel_freqs_hz, device=power_spectrum.device, dtype=power_spectrum.dtype)
+    centroid_hz = calculate_spectral_centroid(power_spectrum, mel_freqs_hz, epsilon)
+    diff = mel_freqs_tensor - centroid_hz
+    diff4 = diff ** 4
+    weighted_diff4 = diff4 * power_spectrum
+    kurtosis_numerator = torch.sum(weighted_diff4)
+    total_power = torch.sum(power_spectrum)
+    kurtosis = kurtosis_numerator / total_power
+    return kurtosis
+
 # Normaliza o tensor de target
 def normalize_tensor(tensor_1d: torch.Tensor) -> torch.Tensor:
     """Normaliza um tensor 1D (shape 20) para o intervalo [0, 1] usando ranges globais."""
@@ -197,33 +209,59 @@ def normalize_tensor(tensor_1d: torch.Tensor) -> torch.Tensor:
     return torch.clamp(normalized, 0.0, 1.0) # clampa para [0, 1] por segurança
 
 # --- Funções de Geração de metros ---
-def _generate_metros(seed: int, min_ms: float, max_ms: float, entropy_factor: float = 0.0) -> torch.Tensor:
+def _generate_metros(seed: int, min_ms: float, max_ms: float, entropy_factor: float = 0.0, variability: float = 0.0) -> torch.Tensor:
     gen = torch.Generator(); gen.manual_seed(seed) 
+    gen_rand = torch.Generator(); gen_rand.manual_seed(seed + 1000)
+    gen_noise = torch.Generator(); gen_noise.manual_seed(int(seed) + 2000)
+
     base_h = torch.rand(1, generator=gen) * (max_ms - min_ms) + min_ms
     m1_h, m2_h, m3_h, m4_h = base_h, base_h * 1.5, base_h * 2.0, base_h * 0.75
     harmonic_metros = torch.tensor([m1_h.item(), m2_h.item(), m3_h.item(), m4_h.item()])
-    gen_rand = torch.Generator(); gen_rand.manual_seed(seed + 1000)
+
     random_metros = torch.rand(4, generator=gen_rand) * (max_ms - min_ms) + min_ms
-    factor = torch.clamp(torch.tensor(entropy_factor), 0.0, 1.0)
-    final_metros = (1.0 - factor) * harmonic_metros + factor * random_metros
-    final_metros = torch.clamp(final_metros, min_ms, max_ms)
+    
+    factor = float(max(0.0, min(1.0, float(entropy_factor))))
+    blended = (1.0 - factor) * harmonic_metros + factor * random_metros
+
+    # ruído adicional para variar localmente cada metro
+    v = float(max(0.0, min(1.0, float(variability))))
+    if v > 0.0:
+        sigma = v * max_ms - v * min_ms
+        noise = torch.randn(4, generator=gen_noise, dtype=torch.float32) * sigma
+        final_metros = blended + noise
+    else:
+        final_metros = blended
+
+    final_metros = torch.clamp(final_metros, min_ms, max_ms).to(dtype=torch.float32)
     return final_metros
 
 #--- Função de Geração de Grão e Âmbito ---
 def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito_min: float, ambito_max: float,
-                           duration_factor: float = 0.5, brightness_factor: float = 0.5) -> torch.Tensor:
+                           duration_factor: float = 0.5, brightness_factor: float = 0.5, variability: float = 0.5) -> torch.Tensor:
     gen = torch.Generator(); gen.manual_seed(seed + 1)
+
+    # Clamp factors
+    d_f = float(max(0.0, min(1.0, duration_factor)))
+    b_f = float(max(0.0, min(1.0, brightness_factor)))
+    v_f = float(max(0.0, min(1.0, variability)))
+
     # Grain
-    grain_base=(grain_min+grain_max)/2.0; grain_range=grain_max-grain_min
-    duration_mod=torch.clamp(torch.tensor(duration_factor),0.0,1.0)-0.5 
-    modulated_grain=grain_base+duration_mod*grain_range 
-    final_grain=torch.clamp(modulated_grain,grain_min,grain_max)
-    # Âmbito
-    ambito_base=(ambito_min+ambito_max)/2.0; ambito_range=ambito_max-ambito_min if (ambito_max-ambito_min)>0 else 0.1 
-    brightness_mod=torch.clamp(torch.tensor(brightness_factor),0.0,1.0)-0.5
-    modulated_ambito=ambito_base+brightness_mod*ambito_range 
-    final_ambito=torch.clamp(modulated_ambito,ambito_min,ambito_max)
-    return torch.tensor([final_grain.item(), final_ambito.item()])
+    grain_base = (grain_min + grain_max) / 2.0
+    grain_range = max(grain_max - grain_min, 1e-6)
+    det_grain = grain_base + (d_f - 0.5) * grain_range  # deslocamento em ±0.5*range
+    sigma_grain = v_f * grain_range
+    noise_grain = torch.randn(1, generator=gen).item() * sigma_grain
+    final_grain = float(torch.clamp(torch.tensor(det_grain + noise_grain), grain_min, grain_max).item())
+
+    # Âmbito: (centro + deslocamento + ruído)
+    ambito_base = (ambito_min + ambito_max) / 2.0
+    ambito_range = ambito_max - ambito_min if (ambito_max - ambito_min) > 0 else 0.1
+    det_ambito = ambito_base + (b_f - 0.5) * ambito_range
+    sigma_ambito = v_f * ambito_range
+    noise_ambito = torch.randn(1, generator=gen).item() * sigma_ambito
+    final_ambito = float(torch.clamp(torch.tensor(det_ambito + noise_ambito), ambito_min, ambito_max).item())
+   
+    return torch.tensor([final_grain, final_ambito], dtype=torch.float32)
 
 ### !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! ###
 # definição heurística dos parâmetros de textura por classe
@@ -306,16 +344,16 @@ def get_process_params_for_label(label: int, folder_name: str, duration_factor: 
     
     # Define ranges baseados nas heurísticas
     metro_min, metro_max = 100, 5000; grain_min, grain_max = 50, 1500; ambito_min, ambito_max = -1, 1
-    if is_dense: metro_min, metro_max = 200, 2000.0
-    elif is_sparse: metro_min, metro_max = 2000.0, 5000.0
-    if is_dilated: grain_min, grain_max = 500.0, 1000.0; ambito_min, ambito_max = 0, 1.0
-    elif is_contracted: grain_min, grain_max = 50.0, 300.0; ambito_min, ambito_max = -1.0, 0.0
+    if is_dense: metro_min, metro_max = 50, 4000
+    elif is_sparse: metro_min, metro_max = 1000, 7000
+    if is_dilated: grain_min, grain_max = 200, 3000; ambito_min, ambito_max = 0, 100
+    elif is_contracted: grain_min, grain_max = 10, 1000; ambito_min, ambito_max = -100, 0
 
 
     # Gera targets de textura
-    metros_tensor = _generate_metros(label, metro_min, metro_max, entropy_factor=entropy_factor) 
+    metros_tensor = _generate_metros(label, metro_min, metro_max, entropy_factor=entropy_factor, variability=0.1) 
     grain_ambito_tensor = _generate_grain_ambito(label, grain_min, grain_max, ambito_min, ambito_max, 
-                                                duration_factor=duration_factor, brightness_factor=brightness_factor) 
+                                                duration_factor=duration_factor, brightness_factor=brightness_factor, variability=0.1) 
     final_params = torch.cat([metros_tensor, grain_ambito_tensor])
     return final_params
 
@@ -376,7 +414,6 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
             for i in range(0, total_frames - N_FRAMES + 1, hop_step):
                 # 6.1. aplica janela deslizante no melspec e transpõe de [64, 10] para [10, 64]
                 melspec_window = melspec[:, i : i + N_FRAMES];  melspec_window_transposed = melspec_window.T # transpõe (10, 64)
-                #src_window_db = melspec_db[:, i : i + N_FRAMES] #src_window_transposed = src_window_db.T # (10, 64) #
                 # 6.2. aplica janela deslizante no melspec de potência para análise espectral
                 src_window_power = melspec_power[:, i : i + N_FRAMES] # (64, 10) #
                 mean_spectrum_power = torch.mean(src_window_power, dim=1) # (64) #
@@ -391,6 +428,7 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
                 # 6.4. Fatores de Modulação 
                 entropy_factor=calculate_spectral_entropy(mean_spectrum_power).item() #
                 spectral_centroid_hz=calculate_spectral_centroid(mean_spectrum_power,MEL_FREQS_HZ)
+                kurtosis_factor=calculate_spec_kurtosis(mean_spectrum_power,MEL_FREQS_HZ).item() #
                 fmin_hz=MELSPEC_PARAMS['fmin']; fmax_hz=MELSPEC_PARAMS['fmax']
                 centroid_range=max(fmax_hz-fmin_hz,1.0)
                 brightness_factor=torch.clamp((spectral_centroid_hz-fmin_hz)/centroid_range,0.0,1.0).item() #
@@ -417,9 +455,42 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
         except Exception as e:
             print(f"    ERRO ao processar {file_path}: {e}")
 
-    # 7. Empilhar e Salvar (Idêntico, mas agora com TGTs normalizados)
+    # 7. salva tensores
     print("\nProcessamento de arquivos concluído.") #
     if not all_src_samples: print("Erro: Nenhuma amostra foi extraída."); return #
+
+    # 8. Análise de Variação do Target de Textura
+    print("\n=== ANÁLISE DE VARIAÇÃO DO TARGET (Textura Normalizada [0,1]) ===")
+    if all_tgt_samples:
+        temp_tgt_tensor = torch.stack(all_tgt_samples) # Mantém no DEVICE
+        temp_labels_tensor = torch.tensor(all_labels, device=DEVICE)
+        
+        unique_labels = torch.unique(temp_labels_tensor).cpu().numpy()
+        label_to_folder = df.set_index('label')['folder'].to_dict()
+
+        for unique_label in sorted(unique_labels):
+            class_mask = (temp_labels_tensor == unique_label)
+            class_tgts = temp_tgt_tensor[class_mask] # Amostras X 10 X 20
+            
+            # Pega o target do primeiro passo (todos são iguais) e isola textura
+            class_texture_targets = class_tgts[:, 0, 14:] # Amostras X 6 
+            
+            if class_texture_targets.shape[0] > 1:
+                # Calcula std dev para as 6 features de textura
+                std_dev = torch.std(class_texture_targets, dim=0) 
+                folder_name = label_to_folder.get(unique_label, f"Label {unique_label}")
+                print(f"\n--- Classe: {folder_name} (Label: {unique_label}) ---")
+                print(f"  No. Amostras: {class_texture_targets.shape[0]}")
+                print(f"  Desvio Padrão (Metros, Grain, Âmbito): {std_dev.cpu().numpy().round(4)}")
+            elif class_texture_targets.shape[0] == 1:
+                 print(f"\n--- Classe: {folder_name} (Label: {unique_label}) ---")
+                 print(f"  No. Amostras: 1 (Desvio padrão não aplicável)")
+            else:
+                 print(f"\n--- Classe: {folder_name} (Label: {unique_label}) ---")
+                 print(f"  No. Amostras: 0")
+
+    else:
+        print("Nenhuma amostra TGT para analisar.")
 
     print("Empilhando tensores...") #
     try:
@@ -490,7 +561,7 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
         print(f"  SRC: {src_path}")
         print(f"  TGT (Normalizado): {tgt_path}")
         print(f"  LABELS: {label_path}")
-        print(f"  RANGES: {ranges_path}") ### NOVO ###
+        print(f"  RANGES: {ranges_path}") 
     except Exception as e:
         print(f"Erro ao salvar arquivos: {e}")
 
