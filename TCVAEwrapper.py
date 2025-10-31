@@ -233,7 +233,7 @@ if __name__ == "__main__":
     # 1. Parâmetros
     INPUT_FEATURES = 64  # número de features de entrada
     TARGET_FEATURES = 20   # número de features de saída
-    SEQ_LEN = 20          # comprimento da sequência de entrada
+    SEQ_LEN = 10          # comprimento da sequência de entrada
     MAX_POS = 100         # posição máxima para o codificador
     LATENT_DIM = 32       # dimensão do espaço latente
 

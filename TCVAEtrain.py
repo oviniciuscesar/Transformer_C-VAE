@@ -22,21 +22,24 @@ PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 
 # Configs
 EPOCHS = 200
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 LR = 1e-3
+CONDITION_DROPOUT_RATE = 0.5
 
 # parameters
 INPUT_FEATURES = 64  # features de entrada
 TARGET_FEATURES = 20  # features alvo
-SEQ_LEN = 20 # comprimento da sequência
+SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 100 # número máximo de passos temporais
 
 # hiperparâmetros para o C-VAE
 LATENT_DIM = 32   # Dimensão do espaço latente do VAE
-BETA_START_EPOCH = 20 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
-BETA_WARMUP_EPOCHS = 100 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
-FREE_BITS_PER_DIM = 0.05
+BETA_START_EPOCH = 0 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
+# BETA_WARMUP_EPOCHS = 10 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
+BETA_MAX = 0
+FREE_BITS_PER_DIM = 0
+N_CYCLES = 1  # Número de ciclos para o agendador cíclico de taxa de aprendizado (não implementado aqui)
 
 
 def set_random_seed(seed: int = SEED) -> None:
@@ -157,7 +160,7 @@ def _calculate_loss(real: torch.Tensor, pred: torch.Tensor, mu: torch.Tensor, lo
     return total_loss_avg, recon_loss_avg, kl_loss_weighted_avg
 
 # Treinamento por época 
-def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device, current_beta: float, free_bits_per_dim: float) -> Tuple[float, float, float, float, float]:
+def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device, current_beta: float, free_bits_per_dim: float, condition_dropout_rate: float) -> Tuple[float, float, float, float, float]:
     model.train()
     total_loss_accum = 0.0
     recon_loss_accum = 0.0 
@@ -170,6 +173,11 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
     for batch_idx, (src, tgt) in enumerate(dataloader):
         src = src.to(device)   # (batch, SEQ_LEN, INPUT_FEATURES)
         tgt = tgt.to(device)   # (batch, SEQ_LEN, TARGET_FEATURES)
+
+
+        if model.training and torch.rand(1).item() < condition_dropout_rate:
+            # Em 15% das vezes, "desliga" a condição (SRC)
+            src = torch.zeros_like(src)
 
         # prepare the input and target (teacher forcing)
         # tgt_input: (batch, SEQ_LEN-1, TARGET_FEATURES)
@@ -260,7 +268,7 @@ def plot_losses(history: Dict[str, List[float]], save_path: str):
 def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device: torch.device):
     # 1 - Otimizador Adam
     optimizer = Adam(model.parameters(), lr=LR)
-    print(f"Iniciando Beta Annealing: Start={BETA_START_EPOCH}, Warmup={BETA_WARMUP_EPOCHS}") #
+    # print(f"Iniciando Beta Annealing: Start={BETA_START_EPOCH}, Warmup={BETA_WARMUP_EPOCHS}") #
     print(f"Usando Free Bits por Dimensão: {FREE_BITS_PER_DIM} nats") #
 
     # Dicionário para armazenar o histórico das perdas
@@ -274,14 +282,39 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
 
     # 2 - Loop de treinamento
     for epoch in range(1, epochs + 1):
-        if epoch < BETA_START_EPOCH: current_beta = 0.0
-        else: progress = (epoch - BETA_START_EPOCH) / BETA_WARMUP_EPOCHS; current_beta = min(progress, 1.0)
+        # if epoch < BETA_START_EPOCH: current_beta = 0.0
+        # else: progress = (epoch - BETA_START_EPOCH) / BETA_WARMUP_EPOCHS; current_beta = min(progress * BETA_MAX, BETA_MAX)
+
+        # # --- !!! LÓGICA DE AGENDAMENTO CÍCLICO !!! ---
+        # # 1. Calcula o comprimento de um ciclo (ex: 200 épocas / 4 ciclos = 50 épocas/ciclo)
+        # cycle_length = epochs // N_CYCLES
+
+        # # 2. Encontra a posição atual dentro do ciclo (ex: Época 53 -> Posição 3 no Ciclo 2)
+        # current_cycle_pos = (epoch - 1) % cycle_length
+
+        # # 3. Calcula o progresso dentro do ciclo (dividido em 2: metade subindo, metade descendo)
+        # # Vamos usar uma subida linear simples na primeira metade do ciclo
+        # half_cycle = cycle_length // 2
+
+        # if current_cycle_pos < half_cycle:
+        #     # Primeira metade: Subindo de 0 até BETA_MAX
+        #     progress = current_cycle_pos / half_cycle
+        #     current_beta = progress * BETA_MAX
+        # else:
+        #     # Segunda metade: Fixo em BETA_MAX (ou descendo, mas fixo é mais simples)
+        #     # Vamos manter fixo em BETA_MAX para dar tempo ao KL de estabilizar
+        #     current_beta = BETA_MAX
+
+        # # Garante que beta seja 0 nas primeiras épocas se Start > 0 (mas estamos com Start=0)
+        # if epoch < BETA_START_EPOCH:
+        #     current_beta = 0.0
+        
+        current_beta = 0.0
 
         # Treina uma época e obtém as três perdas médias e médias de mu/logvar
         avg_total_loss, avg_recon_loss, avg_kl_loss, avg_mu_mean, avg_logvar_mean = train_one_epoch(
             train_loader, model, optimizer, device, 
-            current_beta, FREE_BITS_PER_DIM
-        )
+            current_beta, FREE_BITS_PER_DIM, CONDITION_DROPOUT_RATE)
         
         # Armazena as perdas no histórico
         history['total_loss'].append(avg_total_loss)
@@ -301,6 +334,8 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
 if __name__ == "__main__":
     # Define a seed para reprodutibilidade
     set_random_seed(SEED)
+
+    print(f"Usando dispositivo: {DEVICE}")
 
     print(f"Carregando dataset dos arquivos .pt em '{DATASET_DIR}'...")
     dataset = load_pytorch_dataset(DATASET_DIR)

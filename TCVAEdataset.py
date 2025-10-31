@@ -40,7 +40,7 @@ MELSPEC_PARAMS = {
 }
 
 # Parâmetros do Modelo (targets)
-N_FRAMES = 20       # 20 frames de melspectrograma
+N_FRAMES = 10       # 10 frames de melspectrograma
 N_PITCHES = 7       # 7 notas
 N_AMPS = 7          # 7 amplitudes
 N_TEXTURE_PARAMS = 6 # 4 (metros) + 1 (grão) + 1 (âmbito) = 6
@@ -266,7 +266,7 @@ def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito
 ### !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! ###
 # definição heurística dos parâmetros de textura por classe
 ### !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! ###
-def get_process_params_for_label(label: int, folder_name: str, duration_factor: float, 
+def get_process_params_for_label(seed: int, folder_name: str, duration_factor: float, 
                                  entropy_factor: float, brightness_factor: float) -> torch.Tensor:
     folder_name = folder_name.lower()
     is_dense = False; is_sparse = False; is_dilated = False; is_contracted = False
@@ -343,17 +343,22 @@ def get_process_params_for_label(label: int, folder_name: str, duration_factor: 
         print(f"  Classe '{folder_name}': Mapeada para densa + dilatada")
     
     # Define ranges baseados nas heurísticas
-    metro_min, metro_max = 100, 5000; grain_min, grain_max = 50, 1500; ambito_min, ambito_max = -1, 1
+    metro_min, metro_max = 100, 5000; grain_min, grain_max = 50, 1500; ambito_min, ambito_max = -100, 100
     if is_dense: metro_min, metro_max = 50, 4000
     elif is_sparse: metro_min, metro_max = 1000, 7000
     if is_dilated: grain_min, grain_max = 200, 3000; ambito_min, ambito_max = 0, 100
     elif is_contracted: grain_min, grain_max = 10, 1000; ambito_min, ambito_max = -100, 0
 
+    gen_var = torch.Generator(); gen_var.manual_seed(seed + 42)
+
+    MIN_VARIABILITY = 0.1 
+    MAX_VARIABILITY = 0.7
+    sampled_variability = torch.rand(1, generator=gen_var).item() * (MAX_VARIABILITY - MIN_VARIABILITY) + MIN_VARIABILITY
 
     # Gera targets de textura
-    metros_tensor = _generate_metros(label, metro_min, metro_max, entropy_factor=entropy_factor, variability=0.1) 
-    grain_ambito_tensor = _generate_grain_ambito(label, grain_min, grain_max, ambito_min, ambito_max, 
-                                                duration_factor=duration_factor, brightness_factor=brightness_factor, variability=0.1) 
+    metros_tensor = _generate_metros(seed, metro_min, metro_max, entropy_factor=entropy_factor, variability=sampled_variability) 
+    grain_ambito_tensor = _generate_grain_ambito(seed, grain_min, grain_max, ambito_min, ambito_max, 
+                                                duration_factor=duration_factor, brightness_factor=brightness_factor, variability=sampled_variability) 
     final_params = torch.cat([metros_tensor, grain_ambito_tensor])
     return final_params
 
@@ -418,6 +423,8 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
                 src_window_power = melspec_power[:, i : i + N_FRAMES] # (64, 10) #
                 mean_spectrum_power = torch.mean(src_window_power, dim=1) # (64) #
 
+                unique_seed = int(idx * 10000 + i) # semente única por arquivo + frame
+                
                 # 6.3. Pitches e Amps
                 top_k_values, top_k_indices = torch.topk(mean_spectrum_power, N_PITCHES) #
                 mel_bins=top_k_indices.cpu().numpy(); mel_bins_hz=MEL_FREQS_HZ[mel_bins]
@@ -435,7 +442,7 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
 
                 # 6.5. Parâmetros de Textura
                 tgt_texture_series = get_process_params_for_label(
-                    label, folder_name, duration_factor, entropy_factor, brightness_factor
+                    unique_seed, folder_name, duration_factor, entropy_factor, brightness_factor
                 ).to(DEVICE) # (6) #
 
                 # 6.6. Combinar TGT
