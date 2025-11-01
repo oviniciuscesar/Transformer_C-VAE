@@ -134,9 +134,9 @@ mel_contorch = np.stack(frames, axis=0) if frames else np.zeros((N_MELS, 1))
 # mel_tensor = mel_contorch[:N_FRAMES]
 mel_tensor = torch.from_numpy(mel_contorch[:N_FRAMES]).to(torch.float32)
 mel_tensor = mel_tensor.flatten().unsqueeze(0)  # [1, frames*mel_bins]
-print(f"MelSpectrogram Contorchionist: {mel_contorch.shape}")
-print(f"--- Tensor Melspec: {mel_tensor.shape} ---")
-print(mel_tensor)
+# print(f"MelSpectrogram Contorchionist: {mel_contorch.shape}")
+# print(f"--- Tensor Melspec: {mel_tensor.shape} ---")
+# print(mel_tensor)
 
 
 # carrega modelo torchscript
@@ -147,7 +147,7 @@ loaded_model.eval()
 loaded_model.steps(1) 
 
 # # z fictício para teste
-# dummy_z = torch.randn(32) # média 0, std 1
+# dummy_z = torch.ones(32) # média 0, std 1
 
 # loaded_model.latent(dummy_z) # seta z controlado
 with torch.no_grad():

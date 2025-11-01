@@ -21,11 +21,11 @@ DATASET_DIR = os.path.join(DIRECTORY, 'dataset')
 PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 
 # Configs
-EPOCHS = 200
+EPOCHS = 1
 BATCH_SIZE = 64
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 LR = 1e-3
-CONDITION_DROPOUT_RATE = 0.5
+CONDITION_DROPOUT_RATE = 0.2 # taxa de dropout para a condição (SRC)
 
 # parameters
 INPUT_FEATURES = 64  # features de entrada
@@ -35,9 +35,9 @@ MAX_POS = 100 # número máximo de passos temporais
 
 # hiperparâmetros para o C-VAE
 LATENT_DIM = 32   # Dimensão do espaço latente do VAE
-BETA_START_EPOCH = 0 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
-# BETA_WARMUP_EPOCHS = 10 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
-BETA_MAX = 0
+BETA_START_EPOCH = 20 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
+BETA_WARMUP_EPOCHS = 10 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
+BETA_MAX = 0.01 # Valor máximo de BETA
 FREE_BITS_PER_DIM = 0
 N_CYCLES = 1  # Número de ciclos para o agendador cíclico de taxa de aprendizado (não implementado aqui)
 
@@ -136,28 +136,35 @@ def _calculate_loss(real: torch.Tensor, pred: torch.Tensor, mu: torch.Tensor, lo
     """
     # 1. Perda de Reconstrução (MSE)
     # Usar 'sum' (comum em VAEs para balancear as perdas)
-    loss_fn = nn.MSELoss(reduction='sum')
-    recon_loss_sum = loss_fn(pred, real) # Soma sobre batch*seq*feat
+    loss_fn = nn.MSELoss(reduction='mean')
+    recon_loss = loss_fn(pred, real) # média sobre batch*seq*feat
 
     # 2. Perda KL-Divergence (regularização do espaço latente)
     # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-    kl_loss_per_dim = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=0)
+    kl_loss_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1) # (B)
 
     #3. Free bits regularization
     free_bits_nats = free_bits_per_dim * torch.log(torch.tensor(2.0))
-    free_bits_nats = free_bits_nats.to(kl_loss_per_dim.device)  # move para o mesmo dispositivo
-    kl_loss_clamped = torch.clamp(kl_loss_per_dim, min=free_bits_nats)
-    kl_loss_sum = torch.sum(kl_loss_clamped) # Soma sobre dims latentes
+    free_bits_nats = free_bits_nats.to(kl_loss_per_sample.device)  # move para o mesmo dispositivo
+    kl_loss_clamped = torch.clamp(kl_loss_per_sample, min=free_bits_nats)
+    # kl_loss_sum = torch.sum(kl_loss_clamped) # Soma sobre dims latentes
 
     # 4. Calcular perdas médias por elemento (para logging consistente)
-    num_elements = pred.numel() # B * (L-1) * F_out
-    recon_loss_avg = recon_loss_sum / num_elements
-    kl_loss_weighted_avg = (beta * kl_loss_sum) / num_elements   
+    # num_elements = pred.numel() # B * (L-1) * F_out
+    # recon_loss_avg = recon_loss_sum / num_elements
+    # kl_loss_weighted_avg = (beta * kl_loss_sum) / num_elements   
     
-    # 5. Perda total ELBO
-    total_loss_avg = recon_loss_avg + kl_loss_weighted_avg
+    # # 5. Perda total ELBO
+    # total_loss_avg = recon_loss_avg + kl_loss_weighted_avg
 
-    return total_loss_avg, recon_loss_avg, kl_loss_weighted_avg
+    kl_loss_avg = torch.mean(kl_loss_clamped) 
+
+    # 4. Perda total ELBO (agora ambas são médias)
+    total_loss = recon_loss + (beta * kl_loss_avg)
+
+    # Retorna as médias (KL agora está PONDERADO por beta)
+    return total_loss, recon_loss, (beta * kl_loss_avg)
+
 
 # Treinamento por época 
 def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device, current_beta: float, free_bits_per_dim: float, condition_dropout_rate: float) -> Tuple[float, float, float, float, float]:
@@ -174,14 +181,15 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
         src = src.to(device)   # (batch, SEQ_LEN, INPUT_FEATURES)
         tgt = tgt.to(device)   # (batch, SEQ_LEN, TARGET_FEATURES)
 
-
-        if model.training and torch.rand(1).item() < condition_dropout_rate:
-            # Em 15% das vezes, "desliga" a condição (SRC)
-            src = torch.zeros_like(src)
-
         # prepare the input and target (teacher forcing)
         # tgt_input: (batch, SEQ_LEN-1, TARGET_FEATURES)
         tgt_input = tgt[:, :-1, :]   
+
+        if model.training and torch.rand(1).item() < condition_dropout_rate:
+            # Em 20% das vezes, "desliga" src e tgt_input (substitui por zeros)
+            src = torch.zeros_like(src)
+            tgt_input = torch.zeros_like(tgt_input)
+
 
         # tgt_real: (batch, SEQ_LEN-1, TARGET_FEATURES)
         tgt_real = tgt[:, 1:, :]     
@@ -208,7 +216,6 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
         kl_loss_accum += kl_loss_w.detach().cpu().item()  # Acumula a perda KL ponderada
         mu_mean_accum += mu.detach().mean().cpu().item() # acumula média de mu sobre batch e dim latente
         logvar_mean_accum += logvar.detach().mean().cpu().item() # acumula média de logvar sobre batch e dim latente
-
         n_batches += 1
         
     # Retorna as médias das três perdas e médias de mu/logvar sobre batches
@@ -268,8 +275,10 @@ def plot_losses(history: Dict[str, List[float]], save_path: str):
 def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device: torch.device):
     # 1 - Otimizador Adam
     optimizer = Adam(model.parameters(), lr=LR)
-    # print(f"Iniciando Beta Annealing: Start={BETA_START_EPOCH}, Warmup={BETA_WARMUP_EPOCHS}") #
-    print(f"Usando Free Bits por Dimensão: {FREE_BITS_PER_DIM} nats") #
+   
+    print(f"Iniciando Beta Annealing: Start={BETA_START_EPOCH}, Warmup={BETA_WARMUP_EPOCHS}, Max={BETA_MAX}")
+    print(f"Usando Free Bits por Dimensão: {FREE_BITS_PER_DIM} nats")
+    print(f"Usando Condition Dropout (SRC & TGT_in): {CONDITION_DROPOUT_RATE * 100:.0f}%")
 
     # Dicionário para armazenar o histórico das perdas
     history: Dict[str, List[float]] = {
@@ -282,34 +291,14 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
 
     # 2 - Loop de treinamento
     for epoch in range(1, epochs + 1):
-        # if epoch < BETA_START_EPOCH: current_beta = 0.0
-        # else: progress = (epoch - BETA_START_EPOCH) / BETA_WARMUP_EPOCHS; current_beta = min(progress * BETA_MAX, BETA_MAX)
-
-        # # --- !!! LÓGICA DE AGENDAMENTO CÍCLICO !!! ---
-        # # 1. Calcula o comprimento de um ciclo (ex: 200 épocas / 4 ciclos = 50 épocas/ciclo)
-        # cycle_length = epochs // N_CYCLES
-
-        # # 2. Encontra a posição atual dentro do ciclo (ex: Época 53 -> Posição 3 no Ciclo 2)
-        # current_cycle_pos = (epoch - 1) % cycle_length
-
-        # # 3. Calcula o progresso dentro do ciclo (dividido em 2: metade subindo, metade descendo)
-        # # Vamos usar uma subida linear simples na primeira metade do ciclo
-        # half_cycle = cycle_length // 2
-
-        # if current_cycle_pos < half_cycle:
-        #     # Primeira metade: Subindo de 0 até BETA_MAX
-        #     progress = current_cycle_pos / half_cycle
-        #     current_beta = progress * BETA_MAX
-        # else:
-        #     # Segunda metade: Fixo em BETA_MAX (ou descendo, mas fixo é mais simples)
-        #     # Vamos manter fixo em BETA_MAX para dar tempo ao KL de estabilizar
-        #     current_beta = BETA_MAX
-
-        # # Garante que beta seja 0 nas primeiras épocas se Start > 0 (mas estamos com Start=0)
-        # if epoch < BETA_START_EPOCH:
-        #     current_beta = 0.0
         
-        current_beta = 0.0
+        # lógica de beta annealing
+        if epoch < BETA_START_EPOCH:
+            current_beta = 0.0
+        else:
+            # Cálculo linear simples de warmup
+            progress = (epoch - BETA_START_EPOCH) / BETA_WARMUP_EPOCHS
+            current_beta = min(progress * BETA_MAX, BETA_MAX)
 
         # Treina uma época e obtém as três perdas médias e médias de mu/logvar
         avg_total_loss, avg_recon_loss, avg_kl_loss, avg_mu_mean, avg_logvar_mean = train_one_epoch(

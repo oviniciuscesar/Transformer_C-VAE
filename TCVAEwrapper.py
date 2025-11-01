@@ -38,6 +38,12 @@ class TcvaeWrapper(nn.Module):
         self.target_features = int(target_features) # número de features de saída
         self.frames = int(frames) # tamanho da sequência de entrada
         self.latent_dim = int(latent_dim) # dimensão do espaço latente
+        
+        # recupera a camada linear final e a ativação de saída do modelo TransformerCVAE
+        if not hasattr(self.transformer, "final_projection") or not hasattr(self.transformer, "output_activation"):
+            raise ValueError("O modelo TransformerCVAE não possui 'final_projection' ou 'output_activation'.")
+        self.final_projection = self.transformer.final_projection
+        self.output_activation = self.transformer.output_activation
  
         # métodos e atributos registrados para compatibilidade com torch.ts
         self._methods = ["forward", "steps", "forwardz", "latent"]
@@ -56,13 +62,13 @@ class TcvaeWrapper(nn.Module):
         self.forwardz_input_shape = [self.frames*self.input_features] # entrada achatada + z [N,K]
         self.forwardz_output_shape = [self.max_length*self.target_features] # saída achatada
 
-        # final linear layer
-        proj = None
-        if hasattr(self.transformer, "final_projection"):
-            proj = getattr(self.transformer, "final_projection")
-        if proj is None:
-            raise ValueError("Transformer model does not have a recognized final projection layer.")
-        self.final_projection = proj
+        # # final linear layer
+        # proj = None
+        # if hasattr(self.transformer, "final_projection"):
+        #     proj = getattr(self.transformer, "final_projection")
+        # if proj is None:
+        #     raise ValueError("Transformer model does not have a recognized final projection layer.")
+        # self.final_projection = proj
 
     @torch.jit.export
     def get_methods(self) -> List[str]:
@@ -128,29 +134,40 @@ class TcvaeWrapper(nn.Module):
             return start_vectors[:, :max_length, :].contiguous()
 
         # 1. Encoder (JÁ FOI EXECUTADO)
-        # 2. Buffer de saída inicializado com zeros
+        # 2. Buffer de saída inicializado com zeros (esse é o tgt_in inicial do decoder)
         out_vectors = torch.zeros(B, max_length, F_out, dtype=enc_out.dtype, device=device)
+        # pega os vetores iniciais (start_vectors)
         out_vectors[:, :L0, :] = start_vectors
 
         # 3. Geração auto-regressiva
         t = L0
         # loop até atingir max_length
         while t < max_length:
-            # prepara entrada do decoder: pega todos os vetores gerados até agora
+            # 3.1. prepara entrada do decoder: pega todos os vetores gerados até agora
             tgt_in = out_vectors[:, :t, :]  # (batch, t, target_features)
-            # máscara causal: usada para evitar atenção futura
-            causal = torch.tril(torch.ones(t, t, dtype=torch.bool, device=device))
-            # expande a máscara para o tamanho do batch
+
+            # 3.2.máscara causal: usada para evitar atenção futura
+            causal = self.transformer._create_look_ahead_mask(t, device) # (t, t)
+
+            # 3.3.expande a máscara para o tamanho do batch
             causal_b = causal.unsqueeze(0).expand(B, -1, -1)  # (batch,t,t)
-            # Executa o decoder C-VAE (passando z)
+
+            # 3.4. Executa o decoder C-VAE (passando z)
             dec = self.transformer.decoder(tgt_in, z, enc_out, causal_b, None) 
-            # projeta saída do decoder para o espaço das features de saída
+
+            # 3.5.projeta saída do decoder para o espaço das features de saída [d_model -> target_features]
             predictions = self.final_projection(dec) # (batch, t, target_features)
-            # pega o último vetor previsto
+
+            # 3.6. aplica ativação de saída
+            predictions = self.output_activation(predictions)
+
+            # 3.7. pega o último vetor previsto
             next_vector = predictions[:, -1, :]  # (batch, target_features)
-            # armazena no buffer de saída
+
+            # 3.8. armazena no buffer de saída
             out_vectors[:, t, :] = next_vector
-            # incrementa o passo
+
+            # 3.9. incrementa o passo
             t += 1
         # 4. Retorna os vetores gerados
         return out_vectors
@@ -176,14 +193,22 @@ class TcvaeWrapper(nn.Module):
         # 2. Gera Contexto a partir das features de entrada
         enc_out = self.transformer.conditional_encoder(src, None)
 
-        # 3. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
-        z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)
-        
-        # 4. Cria vetor de início (zeros)
+        # 3. Calcula média de C ao longo da dimensão L para obter vetor fixo
+        C_pooled = enc_out.mean(dim=1) # [batch, d_model]
+
+        # 4. Projeta C pooled para mu e logvar (espaço latente)
+        mu = self.transformer.fc_mu(C_pooled)
+        logvar = self.transformer.fc_logvar(C_pooled)
+
+        # # 5. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
+        # z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)
+        z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
+
+        # 6. Cria vetor de início (zeros)
         start_vector = torch.zeros((B, 1, self.target_features), dtype=dtype, device=device)
 
-        # 5. chama generate para criar a sequência completa
-        # Gera 'max_length + 1' e descarta o primeiro 
+        # 7. chama generate para criar a sequência completa
+        # Gera 'max_length + 1' e descarta o primeiro
         full_seq = self.generate(enc_out, z, start_vector, self.max_length + 1) # full_seq: (batch, max_length+1, target_features)
         
         # 6. Retorna apenas os passos gerados e achata o tensor para enviar ao PD
@@ -208,15 +233,18 @@ class TcvaeWrapper(nn.Module):
         # 1. faz reshape da entrada para (1, frames, input_features)
         src = src.view(B, self.frames, self.input_features)
 
-        # 2. lê z armazenado em z_buffer: usa buffer armazenado se definido, caso contrário gera z aleatório
-        if int(self.z.item()) == 1:
-            z = self.z_buffer.unsqueeze(0)  # (1, latent_dim)
-        else:
-            z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)
-        
-        # 3. Gera Contexto a partir das features de entrada
-        enc_out = self.transformer.conditional_encoder(src, None)
+        # 2. Gera Contexto C a partir das features de entrada (melspectrograma)
+        enc_out = self.transformer.conditional_encoder(src, None) # [batch, frames, d_model]
 
+        # 3. lê z armazenado em z_buffer (passado pelo PD): usa buffer armazenado se definido, caso contrário usa mu do src
+        if int(self.z.item()) == 1:
+            z = self.z_buffer.unsqueeze(0).to(device)  # [1, latent_dim]
+        else:
+            # Se 'z' não foi definido, usa o MU (média determinística) do SRC
+            C_pooled = enc_out.mean(dim=1) # [batch, d_model]
+            mu = self.transformer.fc_mu(C_pooled)
+            z = mu # [batch, latent_dim]
+        
         # 4. Cria vetor de início (zeros)
         start_vector = torch.zeros((B, 1, self.target_features), dtype=dtype, device=device)
 
@@ -264,7 +292,7 @@ if __name__ == "__main__":
         print(f"Erro ao carregar pesos: {e}")
         
     model.eval()
-
+    
     scripted_model = torch.jit.script(model)
     
     # 4. Cria e scripta o Wrapper (passando latent_dim)
