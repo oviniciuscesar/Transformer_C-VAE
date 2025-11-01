@@ -99,6 +99,9 @@ def plot_latent_space(model: TransformerCVAE, dataloader: DataLoader, device: to
     print("Iniciando plotagem do espaço latente (t-SNE)...")
     model.eval() # Coloca o modelo em modo de avaliação
 
+    if not isinstance(dataloader, DataLoader):
+        raise TypeError("plot_latent_space: 'dataloader' deve ser um torch.utils.data.DataLoader")
+
     all_mu = []
     all_labels = []
 
@@ -124,10 +127,11 @@ def plot_latent_space(model: TransformerCVAE, dataloader: DataLoader, device: to
     labels_vector = torch.cat(all_labels, dim=0).numpy()
     
     # Lida com o caso de termos menos amostras que o perplexity padrão (30)
-    perplexity_value = min(30.0, float(mu_tensor.shape[0] - 1))
+    n_samples = float(mu_tensor.shape[0])
+    perplexity_value = max(2.0, min(30.0, n_samples - 1.0))
     
     print(f"Executando t-SNE em {mu_tensor.shape[0]} amostras (Dim: {mu_tensor.shape[1]} -> 2)...")
-    tsne = TSNE(n_components=2, perplexity=perplexity_value, n_iter=1000, learning_rate='auto', init='pca', random_state=SEED)
+    tsne = TSNE(n_components=2, perplexity=perplexity_value, max_iter=1000, learning_rate='auto', init='pca', random_state=SEED)
     z_tsne = tsne.fit_transform(mu_tensor)
 
     print("Plotando t-SNE...")
@@ -244,8 +248,8 @@ def main():
         return
 
     # 4. Chamar a função de plotagem
-    plot_save_path_base = os.path.join(PLOTS_DIR, "latent_space_visualization")
-    plot_latent_space(model, DATASET_DIR, DEVICE, plot_save_path_base)
+    plot_save_path_base = os.path.join(PLOTS_DIR, "latent_Z")
+    plot_latent_space(model, dataloader, DEVICE, plot_save_path_base)
     
     print("\nAnálise t-SNE concluída.")
 

@@ -44,15 +44,15 @@ graph TD
 
     subgraph "1. Encoder Condicional (Gera Contexto C)"
         direction TB
-        src --> enc_proj_cond["Projeção de Entrada src"]
+        src --> enc_proj_cond["projeção dos dados de entrada (src)"]
         enc_proj_cond --> pe_enc_cond["Add Positional Encoding"]
         pe_enc_cond --> enc_stack_cond["Pilha de EncoderLayers\nSelf-Attention"]
         enc_stack_cond --> C["Contexto C\n(B, L_src, d_model)"]
     end
 
-    subgraph "2. Encoder VAE (Gera mu/logvar)"
+    subgraph "2. Camada linear (Gera mu/logvar)"
         direction TB
-        tgt --> enc_proj_vae["Projeção de Entrada tgt"]
+        C --> pool ["média do contexto"]
         enc_proj_vae --> pe_enc_vae["Add Positional Encoding"]
         pe_enc_vae --> enc_stack_vae["Pilha de EncoderLayers\nSelf-Attention"]
         enc_stack_vae --> pool["Average Pooling Temporal"]
