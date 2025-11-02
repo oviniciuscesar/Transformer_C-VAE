@@ -65,8 +65,8 @@ TGT_RANGES = TGT_MAX_VALS - TGT_MIN_VALS
 TGT_RANGES[TGT_RANGES == 0] = 1.0
 
 # ====== PARÂMETROS MEL SPECTROGRAM ======
-audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/ordinario/')
-AUDIO_PATH = os.path.join(audio_dir, 'Fl-ord-A#q6-ff-N-N.wav')
+audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
+AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#q4_Dq5-mf-N-N.wav')
 SAMPLE_RATE = 44100
 N_MELS = 64
 N_FFT = 2048
@@ -147,9 +147,9 @@ loaded_model.eval()
 loaded_model.steps(1) 
 
 # z fictício para teste
-dummy_z = torch.randn(32) # média 0, std 1
+dummy_z = torch.ones(32) # média 0, std 1
 
-# loaded_model.latent(dummy_z) # seta z controlado
+loaded_model.latent(dummy_z) # seta z controlado
 with torch.no_grad():
         output = loaded_model.forwardz(mel_tensor)
 print(f"Output modelo: {output}")  # deve ser [1, N_TARGET_FEATURES]

@@ -146,6 +146,7 @@ class TcvaeWrapper(nn.Module):
             # 3.1. prepara entrada do decoder: pega todos os vetores gerados até agora
             tgt_in = out_vectors[:, :t, :]  # (batch, t, target_features)
 
+            
             # 3.2.máscara causal: usada para evitar atenção futura
             causal = self.transformer._create_look_ahead_mask(t, device) # (t, t)
 
@@ -193,17 +194,19 @@ class TcvaeWrapper(nn.Module):
         # 2. Gera Contexto a partir das features de entrada
         enc_out = self.transformer.conditional_encoder(src, None)
 
-        # 3. Calcula média de C ao longo da dimensão L para obter vetor fixo
-        C_pooled = enc_out.mean(dim=1) # [batch, d_model]
+        # # 3. Calcula média de C ao longo da dimensão L para obter vetor fixo
+        # C_pooled = enc_out.mean(dim=1) # [batch, d_model]
 
 
-        # 4. Projeta C pooled para mu e logvar (espaço latente)
-        mu = self.transformer.fc_mu(C_pooled)
-        logvar = self.transformer.fc_logvar(C_pooled)
+        # # 4. Projeta C pooled para mu e logvar (espaço latente)
+        # mu = self.transformer.fc_mu(C_pooled)
+        # logvar = self.transformer.fc_logvar(C_pooled)
+
+        z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)  # amostra z aleatoriamente
         
         # 5. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
         # z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)
-        z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
+        # z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
 
         # 6. Cria vetor de início (zeros)
         start_vector = torch.zeros((B, 1, self.target_features), dtype=dtype, device=device)
@@ -240,11 +243,14 @@ class TcvaeWrapper(nn.Module):
         # 3. lê z armazenado em z_buffer (passado pelo PD): usa buffer armazenado se definido, caso contrário usa mu do src
         if int(self.z.item()) == 1:
             z = self.z_buffer.unsqueeze(0).to(device)  # [1, latent_dim]
+            self.z.fill_(0)  # reseta o flag de z definido
         else:
+            z = torch.zeros(B, self.latent_dim, device=device, dtype=dtype)
             # Se 'z' não foi definido, usa o MU (média determinística) do SRC
-            C_pooled = enc_out.mean(dim=1) # [batch, d_model]
-            mu = self.transformer.fc_mu(C_pooled)
-            z = mu # [batch, latent_dim]
+            # C_pooled = enc_out.mean(dim=1) # [batch, d_model]
+            # mu = self.transformer.fc_mu(C_pooled)
+            # z = mu # [batch, latent_dim]
+
         
         # 4. Cria vetor de início (zeros)
         start_vector = torch.zeros((B, 1, self.target_features), dtype=dtype, device=device)

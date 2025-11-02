@@ -21,11 +21,11 @@ DATASET_DIR = os.path.join(DIRECTORY, 'dataset')
 PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 
 # Configs
-EPOCHS = 250
+EPOCHS = 300
 BATCH_SIZE = 64
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-LR = 1e-3
-CONDITION_DROPOUT_RATE = 0.35 # taxa de dropout para a condição (SRC)
+LR = 5e-4
+CONDITION_DROPOUT_RATE = 0.1 # taxa de dropout para a condição (SRC)
 
 # parameters
 INPUT_FEATURES = 64  # features de entrada
@@ -35,9 +35,9 @@ MAX_POS = 100 # número máximo de passos temporais
 
 # hiperparâmetros para o C-VAE
 LATENT_DIM = 32   # Dimensão do espaço latente do VAE
-BETA_START_EPOCH = 30 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
+BETA_START_EPOCH = 20 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
 BETA_WARMUP_EPOCHS = 50 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
-BETA_MAX = 0.25 # Valor máximo de BETA
+BETA_MAX = 0.2 # Valor máximo de BETA
 FREE_BITS_PER_DIM = 0.02
 N_CYCLES = 1  # Número de ciclos para o agendador cíclico de taxa de aprendizado (não implementado aqui)
 
@@ -284,6 +284,7 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
     history: Dict[str, List[float]] = {
         'total_loss': [],
         'recon_loss': [],
+        'kl_recon_ratio': [],
         'kl_loss': [],
         'mu_mean': [],  
         'logvar_mean': []
@@ -305,15 +306,18 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
             train_loader, model, optimizer, device, 
             current_beta, FREE_BITS_PER_DIM, CONDITION_DROPOUT_RATE)
         
+        kl_recon_ratio = (avg_kl_loss / avg_recon_loss) if avg_recon_loss > 0 else 0.0
+        
         # Armazena as perdas no histórico
         history['total_loss'].append(avg_total_loss)
         history['recon_loss'].append(avg_recon_loss)
+        history['kl_recon_ratio'].append(kl_recon_ratio)
         history['kl_loss'].append(avg_kl_loss)
         history['mu_mean'].append(avg_mu_mean)
         history['logvar_mean'].append(avg_logvar_mean)
 
         # Imprime as perdas e métricas da época
-        print(f"Epoch {epoch}/{epochs} | Loss={avg_total_loss:.6f} | Recon={avg_recon_loss:.6f} | KL={avg_kl_loss:.6f} | Mu={avg_mu_mean:.4f} | LogVar={avg_logvar_mean:.4f} | beta={current_beta:.4f}")
+        print(f"Epoch {epoch}/{epochs} | Loss={avg_total_loss:.6f} | Recon={avg_recon_loss:.6f} | KL={avg_kl_loss:.6f} | KL/Recon ratio={kl_recon_ratio:.4f} | Mu={avg_mu_mean:.4f} | LogVar={avg_logvar_mean:.4f} | beta={current_beta:.4f}")
 
     # Após o treino, gera o gráfico
     plot_save_path = os.path.join(PLOTS_DIR, "training_metrics.png") # Salva em plots
