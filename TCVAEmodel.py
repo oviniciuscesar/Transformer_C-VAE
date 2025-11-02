@@ -311,6 +311,7 @@ class Encoder(nn.Module):
 #         self.fc_mu = nn.Linear(d_model, latent_dim)
 #         self.fc_logvar = nn.Linear(d_model, latent_dim)
 
+
 #     def forward(self, tgt: torch.Tensor, tgt_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
 #         # tgt: (B, L, target_features)
         
@@ -325,6 +326,64 @@ class Encoder(nn.Module):
 #         logvar = self.fc_logvar(x) # (B, latent_dim)
         
 #         return mu, logvar
+
+class VAEEncoder(nn.Module):
+    """
+    Codificador VAE condicional:
+    - Mapeia (tgt, C) para (mu, logvar)
+    - C é o contexto derivado de src
+    - tgt é a sequência alvo
+    """
+    def __init__(
+        self, 
+        num_layers: int, 
+        d_model: int, 
+        num_heads: int, 
+        d_ff: int, 
+        target_features: int, 
+        latent_dim: int, 
+        max_positions: int, 
+        dropout: float = 0.1
+    ) -> None:
+        super().__init__()
+
+        # Projeção inicial para alinhar dimensões após concatenação [tgt + C]
+        self.input_proj = nn.Linear(target_features + d_model, d_model)
+
+        # Encoder Transformer
+        self.encoder_base = Encoder(
+            num_layers, d_model, num_heads, d_ff,
+            d_model, max_positions, dropout
+        )
+
+        # Projeções para mu e logvar
+        self.fc_mu = nn.Linear(d_model, latent_dim)
+        self.fc_logvar = nn.Linear(d_model, latent_dim)
+
+    def forward(self, tgt: torch.Tensor, C: torch.Tensor, tgt_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        # C: (B, Ls, d_model) → média no tempo para obter contexto fixo
+        C_pooled = C.mean(dim=1)  # (B, d_model)
+
+        # Expande o contexto para cada passo de tempo da sequência alvo
+        C_expanded = C_pooled.unsqueeze(1).repeat(1, tgt.size(1), 1)
+
+        # Concatena tgt e contexto condicional
+        x = torch.cat([tgt, C_expanded], dim=-1)  # (B, L, target_features + d_model)
+
+        # Projeta para o espaço d_model
+        x = self.input_proj(x)  # (B, L, d_model)
+
+        # Passa pelo encoder
+        x = self.encoder_base(x, tgt_mask)  # (B, L, d_model)
+
+        # Pooling sobre a dimensão temporal
+        x = x.mean(dim=1)  # (B, d_model)
+
+        # Projeções finais
+        mu = self.fc_mu(x)
+        logvar = self.fc_logvar(x)
+        return mu, logvar
+
 
 
 
@@ -423,16 +482,16 @@ class TransformerCVAE(nn.Module):
             input_features, max_pos, dropout
         )
 
-        # 2. Encoder VAE (features de saída -> Espaço Latente)
-        # self.vae_encoder = VAEEncoder(
-        #     num_layers_enc, d_model, num_heads, d_ff, 
-        #     target_features, latent_dim, max_pos, dropout
-        # )
+        #2. Encoder VAE (features de saída -> Espaço Latente)
+        self.vae_encoder = VAEEncoder(
+            num_layers_enc, d_model, num_heads, d_ff, 
+            target_features, latent_dim, max_pos, dropout
+        )
 
-        # 2. Camadas lineares para projetar C para mu e logvar
-        # (Substitui o vae_encoder. Agora derivamos Z do SRC (via C))
-        self.fc_mu = nn.Linear(d_model, latent_dim)
-        self.fc_logvar = nn.Linear(d_model, latent_dim)
+        # # 2. Camadas lineares para projetar C para mu e logvar
+        # # (Substitui o vae_encoder. Agora derivamos Z do SRC (via C))
+        # self.fc_mu = nn.Linear(d_model, latent_dim)
+        # self.fc_logvar = nn.Linear(d_model, latent_dim)
         
         # 3. Decoder ((tgt_in, z, C) -> Predição) tgt_in: target features de entrada, z: vetor latente, C: contexto das features de entrada
         self.decoder = Decoder(
@@ -483,16 +542,16 @@ class TransformerCVAE(nn.Module):
         # (batch, Ls, input_features) -> (batch, Ls, d_model)
         C = self.conditional_encoder(src, src_mask) 
         
-        # 2. features alvo -> Espaço Latente
-        # (batch, Lt, target_features) -> (batch, latent_dim), (batch, latent_dim)
-        # mu, logvar = self.vae_encoder(tgt, tgt_padding_mask) 
+        #2. features alvo -> Espaço Latente
+        #(batch, Lt, target_features) -> (batch, latent_dim), (batch, latent_dim)
+        mu, logvar = self.vae_encoder(tgt, C, tgt_padding_mask)
 
-        # 2. Pooling: Comprime a sequência em um vetor (média sobre a dimensão L)
-        C_pooled = C.mean(dim=1) # [batch, d_model]
+        # # 2. Pooling: Comprime a sequência em um vetor (média sobre a dimensão L)
+        # C_pooled = C.mean(dim=1) # [batch, d_model]
 
-        # 3. Projetar C pooled para mu e logvar (espaço latente)
-        mu = self.fc_mu(C_pooled) # (batch, latent_dim)
-        logvar = self.fc_logvar(C_pooled) # (batch, latent_dim)
+        # # 3. Projetar C pooled para mu e logvar (espaço latente)
+        # mu = self.fc_mu(C_pooled) # (batch, latent_dim)
+        # logvar = self.fc_logvar(C_pooled) # (batch, latent_dim)
 
         # 4. Amostragem do espaço latente
         z = self.reparameterize(mu, logvar) # (batch, latent_dim)

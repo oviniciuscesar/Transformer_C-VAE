@@ -196,11 +196,12 @@ class TcvaeWrapper(nn.Module):
         # 3. Calcula média de C ao longo da dimensão L para obter vetor fixo
         C_pooled = enc_out.mean(dim=1) # [batch, d_model]
 
+
         # 4. Projeta C pooled para mu e logvar (espaço latente)
         mu = self.transformer.fc_mu(C_pooled)
         logvar = self.transformer.fc_logvar(C_pooled)
-
-        # # 5. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
+        
+        # 5. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
         # z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)
         z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
 

@@ -21,7 +21,7 @@ DATASET_DIR = os.path.join(DIRECTORY, 'dataset')
 PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 
 # Configs
-EPOCHS = 200
+EPOCHS = 250
 BATCH_SIZE = 64
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 LR = 1e-3
@@ -35,9 +35,9 @@ MAX_POS = 100 # número máximo de passos temporais
 
 # hiperparâmetros para o C-VAE
 LATENT_DIM = 32   # Dimensão do espaço latente do VAE
-BETA_START_EPOCH = 20 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
-BETA_WARMUP_EPOCHS = 30 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
-BETA_MAX = 0.2 # Valor máximo de BETA
+BETA_START_EPOCH = 30 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
+BETA_WARMUP_EPOCHS = 50 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
+BETA_MAX = 0.25 # Valor máximo de BETA
 FREE_BITS_PER_DIM = 0.02
 N_CYCLES = 1  # Número de ciclos para o agendador cíclico de taxa de aprendizado (não implementado aqui)
 

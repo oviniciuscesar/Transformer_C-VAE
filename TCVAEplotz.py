@@ -182,7 +182,7 @@ def plot_latent_space(model: TransformerCVAE, dataloader: DataLoader, device: to
             handles.append(plt.Line2D([0], [0], marker='o', color='w', label=f'{label_id}: {name}', 
                               markerfacecolor=color, markersize=8))
         
-        plt.legend(handles=handles, title="Classes", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+        plt.legend(handles=handles, title="Classes", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='12', title_fontsize='13', frameon=True, borderaxespad=0.5)
         plt.tight_layout(rect=[0, 0, 0.85, 1]) # Ajusta para a legenda externa
     
     except Exception as e:
