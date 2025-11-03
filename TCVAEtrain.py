@@ -21,7 +21,7 @@ DATASET_DIR = os.path.join(DIRECTORY, 'dataset')
 PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 
 # Configs
-EPOCHS = 300
+EPOCHS = 100
 BATCH_SIZE = 64
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 LR = 5e-4
