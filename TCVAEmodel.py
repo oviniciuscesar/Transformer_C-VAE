@@ -488,11 +488,6 @@ class TransformerCVAE(nn.Module):
             target_features, latent_dim, max_pos, dropout
         )
 
-        # # 2. Camadas lineares para projetar C para mu e logvar
-        # # (Substitui o vae_encoder. Agora derivamos Z do SRC (via C))
-        # self.fc_mu = nn.Linear(d_model, latent_dim)
-        # self.fc_logvar = nn.Linear(d_model, latent_dim)
-        
         # 3. Decoder ((tgt_in, z, C) -> Predição) tgt_in: target features de entrada, z: vetor latente, C: contexto das features de entrada
         self.decoder = Decoder(
             num_layers_dec, d_model, num_heads, d_ff, 
@@ -545,13 +540,6 @@ class TransformerCVAE(nn.Module):
         #2. features alvo -> Espaço Latente
         #(batch, Lt, target_features) -> (batch, latent_dim), (batch, latent_dim)
         mu, logvar = self.vae_encoder(tgt, C, tgt_padding_mask)
-
-        # # 2. Pooling: Comprime a sequência em um vetor (média sobre a dimensão L)
-        # C_pooled = C.mean(dim=1) # [batch, d_model]
-
-        # # 3. Projetar C pooled para mu e logvar (espaço latente)
-        # mu = self.fc_mu(C_pooled) # (batch, latent_dim)
-        # logvar = self.fc_logvar(C_pooled) # (batch, latent_dim)
 
         # 4. Amostragem do espaço latente
         z = self.reparameterize(mu, logvar) # (batch, latent_dim)

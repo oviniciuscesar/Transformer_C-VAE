@@ -20,17 +20,17 @@
 
 ### Transformer C-VAE:
 
-- **conditional_encoder:** Processa `src → contexto C`.
+- **Conditional Encoder:** Processa `entrada → contexto C`.
 
-- **vae_encoder:** Processa `tgt → mu e logvar`.
+- **Variational Encoder:** Processa `tgt e C → mu e logvar`.
 
-- **reparameterize:** `(mu, logvar) → z`.
+- **Reparametrização:** `(mu, logvar) → z`.
 
-- **decoder:** Recebe `tgt_in, z, C` e gera representações.
+- **Decoder:** Recebe `tgt_in, z, C` e gera representações.
 
-- **final_projection:** `d_model → target_features`.
+- **Camada linear:** Projeta: `d_model → target_features`.
 
-- **forward retorna:** `(predictions, mu, logvar)`.
+- **Saída:** `(predictions, mu, logvar)`.
 
 ### 2. Diagrama da Arquitetura (Fluxo de Dados)
 
@@ -40,19 +40,19 @@ O diagrama abaixo ilustra o fluxo de dados (inputs src e tgt) através do modelo
 graph TD
     src["Input: Sequência Fonte (src)"]
     tgt["Input: Sequência Alvo (tgt)"]
-    tgt_in["Input: Alvo Shiftado (tgt_in)"]
+    tgt_in["Input: Alvo deslocado (último passo excluído) (tgt_in)"]
 
     subgraph "1. Encoder Condicional (Gera Contexto C)"
         direction TB
-        src --> enc_proj_cond["projeção dos dados de entrada (src)"]
-        enc_proj_cond --> pe_enc_cond["Add Positional Encoding"]
-        pe_enc_cond --> enc_stack_cond["Pilha de EncoderLayers\nSelf-Attention"]
-        enc_stack_cond --> C["Contexto C\n(B, L_src, d_model)"]
+        src --> CE["projeção da entrada com camada linear (src)"]
+        CE --> pe_enc_cond["Add Positional Encoding"]
+        pe_enc_cond --> enc_stack_cond["Pilha de Encoder e Self-Attention"]
+        enc_stack_cond --> C["Contexto (C)"]
     end
 
-    subgraph "2. Camada linear (Gera mu/logvar)"
+    subgraph "2. Encoder Variacional (Gera mu e logvar)"
         direction TB
-        C --> pool ["média do contexto"]
+        C --> pool["média do contexto e concatena com tgt"]
         enc_proj_vae --> pe_enc_vae["Add Positional Encoding"]
         pe_enc_vae --> enc_stack_vae["Pilha de EncoderLayers\nSelf-Attention"]
         enc_stack_vae --> pool["Average Pooling Temporal"]
