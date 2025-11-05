@@ -497,8 +497,8 @@ class TransformerCVAE(nn.Module):
         # 4. Camada final (camada linear para projetar d_model -> target_features)
         self.final_projection = nn.Linear(d_model, target_features)
 
-        # 5. ativação sigmoid na saída para garantir que os valores estejam entre 0 e 1
-        self.output_activation = nn.Sigmoid()
+        # 5. ativação tanh na saída para garantir que os valores estejam entre -1å e 1
+        self.output_activation = nn.Tanh()
 
     # Cria máscara causal (look-ahead)
     def _create_look_ahead_mask(self, size: int, device: torch.device) -> torch.Tensor:
@@ -558,8 +558,7 @@ class TransformerCVAE(nn.Module):
         # 6. Projeção final (camada linear)
         # (batch, Lt-1, d_model) -> (batch, Lt-1, target_features)
         predictions = self.final_projection(dec_out)
-
-        # 7. Aplica ativação final (sigmoid)
+        # 7. Aplica ativação final (tanh)
         predictions = self.output_activation(predictions)
 
         # retorna as previsões, média e log-variância do espaço latente

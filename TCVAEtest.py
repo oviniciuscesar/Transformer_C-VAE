@@ -65,8 +65,23 @@ TGT_RANGES = TGT_MAX_VALS - TGT_MIN_VALS
 TGT_RANGES[TGT_RANGES == 0] = 1.0
 
 # ====== PARÂMETROS MEL SPECTROGRAM ======
-audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
-AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
+
+audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/jet_whistle/')
+AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
+
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#5_G4_G#4_C#6-mf-N-N.wav')
+
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/ordinario/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-ord-A#q6-ff-N-N.wav')
+
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
+
+
 SAMPLE_RATE = 44100
 N_MELS = 64
 N_FFT = 2048

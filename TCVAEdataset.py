@@ -62,13 +62,13 @@ NORMALIZATION_RANGES = {
     # Features 0-6: Pitches (MIDI Cents)
     'pitch': {'min': 6000.0, 'max': 9600.0}, # três oitavas
     # Features 7-13: Amplitudes (MIDI Velocity)
-    'amp': {'min': 0.0, 'max': 127.0},
+    'amp': {'min': 80.0, 'max': 127.0},
     # Features 14-17: Metrônomos (ms)
-    'metro': {'min': 10, 'max': 8000.0}, # 
+    'metro': {'min': 100.0, 'max': 8000.0}, # 
     # Feature 18: Grain Size (ms)
-    'grain': {'min': 10.0, 'max': 2500.0}, # 
+    'grain': {'min': 50.0, 'max': 1500.0}, # 
     # Feature 19: Âmbito
-    'ambito': {'min': -100, 'max': 100}
+    'ambito': {'min': 10, 'max': 100}
 }
 
 # Cria tensores com os valores min/max para normalização
@@ -175,7 +175,7 @@ def calculate_spectral_entropy(power_spectrum: torch.Tensor, epsilon=1e-10) -> t
     pdf = power_spectrum / power_spectrum.sum()
     log2_pdf = torch.log2(pdf)
     entropy = -torch.sum(pdf * log2_pdf)
-    max_entropy = torch.log2(torch.tensor(power_spectrum.shape[0], dtype=torch.float32))
+    max_entropy = torch.log2(torch.tensor(power_spectrum.shape[0], dtype=torch.float32, device=power_spectrum.device))
     normalized_entropy = entropy / max_entropy
     return torch.clamp(normalized_entropy, 0.0, 1.0)
 
@@ -200,13 +200,206 @@ def calculate_spec_kurtosis(power_spectrum: torch.Tensor, mel_freqs_hz: np.ndarr
     kurtosis = kurtosis_numerator / total_power
     return kurtosis
 
-# Normaliza o tensor de target
-def normalize_tensor(tensor_1d: torch.Tensor) -> torch.Tensor:
-    """Normaliza um tensor 1D (shape 20) para o intervalo [0, 1] usando ranges globais."""
-    min_vals = TGT_MIN_VALS.to(tensor_1d.device)
-    ranges = TGT_RANGES.to(tensor_1d.device)
-    normalized = (tensor_1d - min_vals) / ranges
-    return torch.clamp(normalized, 0.0, 1.0) # clampa para [0, 1] por segurança
+def normalize_minus1_1(x: torch.Tensor, xmin: float = 0.0, xmax: float = 127.0) -> torch.Tensor:
+    """
+    Normaliza amplitudes (ex.: MIDI 0–127) para o intervalo [-1, 1].
+    - amps: tensor shape (..., 7)
+    Retorna tensor normalizado com mesmo dtype/device.
+    """
+    x_min = float(xmin) + 1e-8
+    x_max = float(xmax)
+    x_clamped = torch.clamp(x, min=x_min, max=x_max)
+    xmin_t = torch.as_tensor(xmin, dtype=x.dtype, device=x.device)
+    xmax_t = torch.as_tensor(xmax, dtype=x.dtype, device=x.device)
+    eps = torch.as_tensor(1e-8, dtype=x.dtype, device=x.device)
+    x_log = torch.log(x_clamped)
+    min_log = torch.log(xmin_t + eps)
+    max_log = torch.log(xmax_t)
+    denom = (max_log - min_log).clamp(min=1e-8)
+    norm01 = (x_log - min_log) / denom
+    return torch.clamp(norm01 * 2.0 - 1.0, -1.0, 1.0)
+
+def normalize_texture_params_log11(texture6: torch.Tensor) -> torch.Tensor:
+    """
+    Normaliza [m1,m2,m3,m4,grain,âmbito] para [-1, 1]:
+    - metrônomos (ms): log -> [-1, 1]
+    - grain (ms):      log -> [-1, 1]
+    - âmbito:          linear -> [-1, 1]
+    """
+    assert texture6.numel() == 6, "texture6 deve ter 6 elementos"
+    metros = texture6[0:4]
+    grain = texture6[4:5]
+    ambito = texture6[5:6]
+    metros_n = normalize_minus1_1(
+        metros, NORMALIZATION_RANGES['metro']['min'], NORMALIZATION_RANGES['metro']['max']
+    )
+    grain_n = normalize_minus1_1(
+        grain, NORMALIZATION_RANGES['grain']['min'], NORMALIZATION_RANGES['grain']['max']
+    )
+    ambito_n = normalize_minus1_1(
+        ambito, NORMALIZATION_RANGES['ambito']['min'], NORMALIZATION_RANGES['ambito']['max']
+    )
+    return torch.cat([metros_n, grain_n, ambito_n], dim=0)
+
+
+def denormalize_minus1_1(x_norm: torch.Tensor, xmin: float, xmax: float) -> torch.Tensor:
+    """
+    Desnormaliza valores em [-1, 1] para [xmin, xmax] usando a inversa da normalização logarítmica.
+    Preserva dtype/device.
+    """
+    # mapeia [-1,1] -> [0,1]
+    x01 = torch.clamp((x_norm + 1.0) * 0.5, 0.0, 1.0)
+    xmin_t = torch.as_tensor(xmin, dtype=x_norm.dtype, device=x_norm.device)
+    xmax_t = torch.as_tensor(xmax, dtype=x_norm.dtype, device=x_norm.device)
+    eps = torch.as_tensor(1e-8, dtype=x_norm.dtype, device=x_norm.device)
+
+    # reconstrói no domínio do log e aplica exp
+    min_log = torch.log(xmin_t + eps)
+    max_log = torch.log(xmax_t)
+    x_log = x01 * (max_log - min_log) + min_log
+    x = torch.exp(x_log)
+    return torch.clamp(x, xmin_t, xmax_t)
+
+
+def normalize_zscore(pitches: torch.Tensor, mean: float = 7800.0, std: float = 1200.0) -> torch.Tensor:
+    """Normaliza pitches via Z-score """
+    mean_t = torch.as_tensor(mean, dtype=pitches.dtype, device=pitches.device)
+    std_t = torch.as_tensor(std, dtype=pitches.dtype, device=pitches.device).clamp(min=1e-8)
+    return (pitches - mean_t) / std_t
+
+def denormalize_pitches_zscore(pitches_norm: torch.Tensor, mean: float = 7800.0, std: float = 1200.0) -> torch.Tensor:
+    """Desnormaliza pitches Z-score"""
+    mean_t = torch.as_tensor(mean, dtype=pitches_norm.dtype, device=pitches_norm.device)
+    std_t = torch.as_tensor(std, dtype=pitches_norm.dtype, device=pitches_norm.device).clamp(min=1e-8)
+    return pitches_norm * std_t + mean_t
+
+
+def generate_pitches_amps_from_class(seed, class_name, brightness_factor, duration_factor):
+    """
+    Gera pitches e amplitudes baseado na classe técnica SEM usar SRC
+    """
+    gen = torch.Generator(device=DEVICE).manual_seed(seed)
+    
+    # Perfis base por classe técnica (exemplos)
+    class_profiles = {
+        'aeolian': {'base_pitch': 6800, 'pitch_range': 600, 'base_amp': 80, 'amp_range': 30},
+        'crescendo': {'base_pitch': 7600, 'pitch_range': 856, 'base_amp': 80, 'amp_range': 40},
+        'crescendo_to_decrescendo': {'base_pitch': 6700, 'pitch_range': 500, 'base_amp': 85, 'amp_range': 37},
+        'decrescendo': {'base_pitch': 7500, 'pitch_range': 500, 'base_amp': 80, 'amp_range': 20},
+        'flatterzunge': {'base_pitch': 7400, 'pitch_range': 900, 'base_amp': 80, 'amp_range': 45},
+        'flatterzunge_to_ordinario': {'base_pitch': 7500, 'pitch_range': 700, 'base_amp': 80, 'amp_range': 25},
+        'jet_whistle': {'base_pitch': 9000, 'pitch_range': 1000, 'base_amp': 60, 'amp_range': 30},
+        'multiphonics': {'base_pitch': 7200, 'pitch_range': 1200, 'base_amp': 70, 'amp_range': 25},
+        'ordinario': {'base_pitch': 7600, 'pitch_range': 400, 'base_amp': 90, 'amp_range': 15},
+        'ordinario_to_flatterzunge': {'base_pitch': 7500, 'pitch_range': 700, 'base_amp': 80, 'amp_range': 25},
+        'sforzato': {'base_pitch': 7600, 'pitch_range': 625, 'base_amp': 80, 'amp_range': 30},
+        'staccato': {'base_pitch': 7600, 'pitch_range': 700, 'base_amp': 80, 'amp_range': 20},
+        'tongue_ram-pizz': {'base_pitch': 8500, 'pitch_range': 800, 'base_amp': 75, 'amp_range': 30},
+        'trill': {'base_pitch': 7800, 'pitch_range': 600, 'base_amp': 80, 'amp_range': 30},
+    }
+    
+    # Default para classes não especificadas
+    profile = class_profiles.get(class_name.lower(), 
+                               {'base_pitch': 7600, 'pitch_range': 600, 'base_amp': 80, 'amp_range': 20})
+    
+    # Gera 7 pitches com variação controlada
+    base_pitches = profile['base_pitch'] + brightness_factor * profile['pitch_range']
+    pitches = base_pitches + torch.randn(7, generator=gen, device=DEVICE) * profile['pitch_range'] * 0.2
+    
+    # Gera 7 amplitudes com variação controlada  
+    base_amps = profile['base_amp'] + duration_factor * profile['amp_range']
+    amps = base_amps + torch.randn(7, generator=gen, device=DEVICE) * profile['amp_range'] * 0.3
+    
+    # Ordena pitches e aplica clamping
+    pitches = torch.sort(pitches)[0]
+    pitches = torch.clamp(pitches, 6000.0, 9600.0)
+    amps = torch.clamp(amps, 0.0, 127.0)
+    
+    return pitches, amps
+
+
+def calculate_temporal_targets(melspec_power, folder_name, global_factors, frame_indices):
+    """
+    Calcula targets ESPECÍFICOS para cada um dos 10 frames temporais
+    """
+    temporal_targets = []
+    
+    for frame_idx in frame_indices:
+        # 1. Potência APENAS deste frame específico
+        frame_power = melspec_power[:, frame_idx]  # [64] - apenas este frame!
+        
+        # 2. Spectral features APENAS deste frame
+        frame_entropy = calculate_spectral_entropy(frame_power)
+        frame_centroid = calculate_spectral_centroid(frame_power, MEL_FREQS_HZ)
+        frame_kurtosis = calculate_spec_kurtosis(frame_power, MEL_FREQS_HZ)
+
+        fmin_hz=MELSPEC_PARAMS['fmin']; fmax_hz=MELSPEC_PARAMS['fmax']
+        centroid_range=max(fmax_hz-fmin_hz,1.0)
+        
+        # 3. Brightness específico deste frame
+        brightness_factor = float(torch.clamp((frame_centroid-fmin_hz)/centroid_range, 0.0, 1.0))  # float puro
+
+        # Gera pitches e amplitudes baseado na classe técnica e brilho
+        tgt_cents, tgt_amps = generate_pitches_amps_from_class(
+            seed=global_factors['seed'] + frame_idx,
+            class_name=folder_name,
+            brightness_factor=brightness_factor,
+            duration_factor=global_factors['duration_factor']
+        )
+        
+        # # 4. calcula picos de pitch e amp de cada frames
+        # top_k_values, top_k_indices = torch.topk(frame_power, N_PITCHES)
+        # mel_bins_hz = MEL_FREQS_HZ[top_k_indices.cpu().numpy()]
+        # midi_cents = librosa.hz_to_midi(mel_bins_hz) * 100.0
+        # tgt_cents = torch.tensor(midi_cents, device=DEVICE, dtype=torch.float32)
+        # tgt_amps = power_to_midi_velocity(top_k_values)
+
+        # normaliza pitches e amps
+        tgt_cents = normalize_zscore(tgt_cents)
+        tgt_amps = normalize_minus1_1(tgt_amps, xmin=0, xmax=127.0)
+
+        # 5. Textura com variação temporal 
+        texture_seed = global_factors['seed'] + frame_idx  # Semente por frame
+        tgt_texture = get_temporal_texture_params(
+            texture_seed, folder_name, 
+            global_factors['duration_factor'],
+            frame_entropy.item(),
+            brightness_factor,
+            frame_idx  # Posição temporal
+        )
+
+        # normaliza textura
+        tgt_texture = normalize_texture_params_log11(tgt_texture)
+
+        frame_target = torch.cat([tgt_cents, tgt_amps, tgt_texture])
+        temporal_targets.append(frame_target)
+    
+    return torch.stack(temporal_targets)  # [seq_len, features]
+
+def get_temporal_texture_params(seed, folder_name, duration_factor, 
+                              entropy_factor, brightness_factor, frame_position):
+    """
+    Gera parâmetros de textura com variação temporal suave
+    """
+    # Base por classe (como antes)
+    base_params = get_process_params_for_label(
+        seed, folder_name, duration_factor, entropy_factor, brightness_factor
+    ).to(DEVICE) 
+    
+    # Variação mais natural baseada em walk aleatório
+    gen = torch.Generator(device=DEVICE).manual_seed(seed + frame_position)
+    
+    # Ruído suave que acumula ao longo do tempo
+    noise_scale = 0.05 + 0.1 * (frame_position / 10.0)  # Aumenta com o tempo
+    temporal_noise = torch.randn(6, generator=gen, device=DEVICE) * noise_scale
+    
+    # Aplica variação seletivamente
+    varied_params = base_params.clone()
+    varied_params[0:4] += temporal_noise[0:4] * base_params[0:4]  # Metrônomos
+    varied_params[4] += temporal_noise[4] * 0.1 * base_params[4]  # Grain
+    varied_params[5] += temporal_noise[5] * 10.0  # Âmbito
+    return varied_params
+
 
 # --- Funções de Geração de metros ---
 def _generate_metros(seed: int, min_ms: float, max_ms: float, entropy_factor: float = 0.0, variability: float = 0.0) -> torch.Tensor:
@@ -233,7 +426,7 @@ def _generate_metros(seed: int, min_ms: float, max_ms: float, entropy_factor: fl
         final_metros = blended
 
     final_metros = torch.clamp(final_metros, min_ms, max_ms).to(dtype=torch.float32)
-    return final_metros
+    return final_metros.to(DEVICE)  # <- garante device
 
 #--- Função de Geração de Grão e Âmbito ---
 def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito_min: float, ambito_max: float,
@@ -261,7 +454,7 @@ def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito
     noise_ambito = torch.randn(1, generator=gen).item() * sigma_ambito
     final_ambito = float(torch.clamp(torch.tensor(det_ambito + noise_ambito), ambito_min, ambito_max).item())
    
-    return torch.tensor([final_grain, final_ambito], dtype=torch.float32)
+    return torch.tensor([final_grain, final_ambito], dtype=torch.float32, device=DEVICE)
 
 ### !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! ###
 # definição heurística dos parâmetros de textura por classe
@@ -344,10 +537,10 @@ def get_process_params_for_label(seed: int, folder_name: str, duration_factor: f
     
     # Define ranges baseados nas heurísticas
     metro_min, metro_max = 100, 5000; grain_min, grain_max = 50, 1500; ambito_min, ambito_max = -100, 100
-    if is_dense: metro_min, metro_max = 50, 4000
-    elif is_sparse: metro_min, metro_max = 1000, 7000
-    if is_dilated: grain_min, grain_max = 200, 3000; ambito_min, ambito_max = 0, 100
-    elif is_contracted: grain_min, grain_max = 10, 1000; ambito_min, ambito_max = -100, 0
+    if is_dense: metro_min, metro_max = 100, 3000 
+    elif is_sparse: metro_min, metro_max = 2500, 8000
+    if is_dilated: grain_min, grain_max = 500, 1500; ambito_min, ambito_max = 10, 100
+    elif is_contracted: grain_min, grain_max = 50, 500; ambito_min, ambito_max = 65, 100
 
     gen_var = torch.Generator(); gen_var.manual_seed(seed + 42)
 
@@ -359,7 +552,7 @@ def get_process_params_for_label(seed: int, folder_name: str, duration_factor: f
     metros_tensor = _generate_metros(seed, metro_min, metro_max, entropy_factor=entropy_factor, variability=sampled_variability) 
     grain_ambito_tensor = _generate_grain_ambito(seed, grain_min, grain_max, ambito_min, ambito_max, 
                                                 duration_factor=duration_factor, brightness_factor=brightness_factor, variability=sampled_variability) 
-    final_params = torch.cat([metros_tensor, grain_ambito_tensor])
+    final_params = torch.cat([metros_tensor, grain_ambito_tensor]).to(DEVICE)
     return final_params
 
 
@@ -426,11 +619,11 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
                 unique_seed = int(idx * 10000 + i) # semente única por arquivo + frame
                 
                 # 6.3. Pitches e Amps
-                top_k_values, top_k_indices = torch.topk(mean_spectrum_power, N_PITCHES) #
-                mel_bins=top_k_indices.cpu().numpy(); mel_bins_hz=MEL_FREQS_HZ[mel_bins]
-                midi_cents=librosa.hz_to_midi(mel_bins_hz)*100.0
-                tgt_cents_series=torch.tensor(midi_cents,device=DEVICE,dtype=torch.float32) # (7) #
-                tgt_amps_series=power_to_midi_velocity(top_k_values) # (7) #
+                # top_k_values, top_k_indices = torch.topk(mean_spectrum_power, N_PITCHES) #
+                # mel_bins=top_k_indices.cpu().numpy(); mel_bins_hz=MEL_FREQS_HZ[mel_bins]
+                # midi_cents=librosa.hz_to_midi(mel_bins_hz)*100.0
+                # tgt_cents_series=torch.tensor(midi_cents,device=DEVICE,dtype=torch.float32) # (7) #
+                # tgt_amps_series=power_to_midi_velocity(top_k_values) # (7) #
 
                 # 6.4. Fatores de Modulação 
                 entropy_factor=calculate_spectral_entropy(mean_spectrum_power).item() #
@@ -440,23 +633,36 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
                 centroid_range=max(fmax_hz-fmin_hz,1.0)
                 brightness_factor=torch.clamp((spectral_centroid_hz-fmin_hz)/centroid_range,0.0,1.0).item() #
 
-                # 6.5. Parâmetros de Textura
-                tgt_texture_series = get_process_params_for_label(
-                    unique_seed, folder_name, duration_factor, entropy_factor, brightness_factor
-                ).to(DEVICE) # (6) #
+                # # 6.5. Parâmetros de Textura
+                # tgt_texture_series = get_process_params_for_label(
+                #     unique_seed, folder_name, duration_factor, entropy_factor, brightness_factor
+                # ).to(DEVICE) # (6) #
 
-                # 6.6. Combinar TGT
-                tgt_row_static = torch.cat([tgt_cents_series, tgt_amps_series, tgt_texture_series]) # (20) #
+                # # 6.6. Combinar TGT
+                # tgt_row_static = torch.cat([tgt_cents_series, tgt_amps_series, tgt_texture_series]) # (20) #
 
-                # 6.7. Normalizar TGT
-                tgt_row_normalized = normalize_tensor(tgt_row_static) # (20) , valores [0, 1]
+                # # 6.7. Normalizar TGT
+                # tgt_row_normalized = normalize_tensor(tgt_row_static) # (20) , valores [0, 1]
 
                 # 6.8. Criar Sequência TGT Normalizada (Repetir linha normalizada)
-                tgt_sequence_normalized = tgt_row_normalized.repeat(N_FRAMES, 1) # (10, 20)
+                # tgt_sequence_normalized = tgt_row_normalized.repeat(N_FRAMES, 1) # (10, 20)
 
+                temporal_targets = calculate_temporal_targets(
+                    melspec_power=melspec_power[:, i:i+N_FRAMES],  # Janela temporal
+                    folder_name=folder_name,
+                    global_factors={
+                        'seed': unique_seed,
+                        'duration_factor': duration_factor,
+                        'entropy_factor': entropy_factor,
+                        'brightness_factor': brightness_factor
+                    },
+                    frame_indices=range(N_FRAMES)  # Todos os frames da janela  # (10, 20    )
+                )
+
+            
                 # 6.9. Adicionar (SRC, TGT Normalizado, Label)
                 all_src_samples.append(melspec_window_transposed)
-                all_tgt_samples.append(tgt_sequence_normalized) # Salva o TGT normalizado
+                all_tgt_samples.append(temporal_targets) # Salva o TGT normalizado
                 all_labels.append(label)
 
         except Exception as e:
@@ -467,7 +673,7 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
     if not all_src_samples: print("Erro: Nenhuma amostra foi extraída."); return #
 
     # 8. Análise de Variação do Target de Textura
-    print("\n=== ANÁLISE DE VARIAÇÃO DO TARGET (Textura Normalizada [0,1]) ===")
+    print("\n=== ANÁLISE DE VARIAÇÃO DO TARGET (Textura Normalizada [-1,1]) ===")
     if all_tgt_samples:
         temp_tgt_tensor = torch.stack(all_tgt_samples) # Mantém no DEVICE
         temp_labels_tensor = torch.tensor(all_labels, device=DEVICE)
@@ -535,7 +741,7 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
             # Mostra o target do primeiro passo (todos são iguais)
             tgt_step_0_norm = example_tgt_normalized[0] # Shape (20)
             print(f"  TGT Shape (Normalizado): {example_tgt_normalized.shape}")
-            print(f"  TGT (Passo 0, Normalizado [0,1]):")
+            print(f"  TGT (Passo 0, Normalizado [-1,1]):")
             # Imprime formatado para melhor leitura
             print(f"    Pitches (7): {tgt_step_0_norm[0:7].numpy().round(3)}")
             print(f"    Amps (7):    {tgt_step_0_norm[7:14].numpy().round(3)}")

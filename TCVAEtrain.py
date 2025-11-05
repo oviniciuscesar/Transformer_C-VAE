@@ -21,11 +21,18 @@ DATASET_DIR = os.path.join(DIRECTORY, 'dataset')
 PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 
 # Configs
-EPOCHS = 100
-BATCH_SIZE = 64
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-LR = 5e-4
+
+# parâmetros de treinamento
+EPOCHS = 120
+BATCH_SIZE = 128
+LR = 1e-4
 CONDITION_DROPOUT_RATE = 0.1 # taxa de dropout para a condição (SRC)
+LATENT_DIM = 32
+BETA_START_EPOCH = 20
+BETA_WARMUP_EPOCHS = 50
+BETA_MAX = 0.2
+FREE_BITS_PER_DIM = 0.2
 
 # parameters
 INPUT_FEATURES = 64  # features de entrada
@@ -33,13 +40,8 @@ TARGET_FEATURES = 20  # features alvo
 SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 100 # número máximo de passos temporais
 
-# hiperparâmetros para o C-VAE
-LATENT_DIM = 32   # Dimensão do espaço latente do VAE
-BETA_START_EPOCH = 20 # Em qual época começar a aumentar BETA (ex: após 10 épocas de MSE puro)
-BETA_WARMUP_EPOCHS = 50 # Quantas épocas para ir de BETA=0 a BETA=1 (ex: 50 épocas)
-BETA_MAX = 0.2 # Valor máximo de BETA
-FREE_BITS_PER_DIM = 0.02
-N_CYCLES = 1  # Número de ciclos para o agendador cíclico de taxa de aprendizado (não implementado aqui)
+
+
 
 
 def set_random_seed(seed: int = SEED) -> None:
