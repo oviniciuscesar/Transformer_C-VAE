@@ -8,6 +8,7 @@ import numpy as np
 from pathlib import Path
 import librosa
 import json 
+from TCVAEdataset import NORMALIZATION_RANGES
 
 # Importa sua biblioteca
 try:
@@ -29,20 +30,71 @@ TARGET_FEATURES = N_PITCHES + N_AMPS + N_TEXTURE_PARAMS  # target completo: 7 + 
 DEVICE = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 
-# definição dos ranges globais de normalização
-# !!! IMPORTANTE: ajustar com base nas heurísticas dos targets !!!
-NORMALIZATION_RANGES = {
-    # Features 0-6: Pitches (MIDI Cents)
-    'pitch': {'min': 6000.0, 'max': 9600.0}, # três oitavas
-    # Features 7-13: Amplitudes (MIDI Velocity)
-    'amp': {'min': 0.0, 'max': 127.0},
-    # Features 14-17: Metrônomos (ms)
-    'metro': {'min': 10, 'max': 8000.0}, # 
-    # Feature 18: Grain Size (ms)
-    'grain': {'min': 10.0, 'max': 2500.0}, # 
-    # Feature 19: Âmbito
-    'ambito': {'min': -100, 'max': 100}
-}
+def denormalize_minus1_1(x_norm: torch.Tensor, xmin: float, xmax: float) -> torch.Tensor:
+    """
+    Desnormaliza valores em [-1, 1] para [xmin, xmax] usando a inversa da normalização logarítmica.
+    Preserva dtype/device.
+    """
+    # mapeia [-1,1] -> [0,1]
+    x01 = torch.clamp((x_norm + 1.0) * 0.5, 0.0, 1.0)
+    xmin_t = torch.as_tensor(xmin, dtype=x_norm.dtype, device=x_norm.device)
+    xmax_t = torch.as_tensor(xmax, dtype=x_norm.dtype, device=x_norm.device)
+    eps = torch.as_tensor(1e-8, dtype=x_norm.dtype, device=x_norm.device)
+
+    # reconstrói no domínio do log e aplica exp
+    min_log = torch.log(xmin_t + eps)
+    max_log = torch.log(xmax_t)
+    x_log = x01 * (max_log - min_log) + min_log
+    x = torch.exp(x_log)
+    return torch.clamp(x, xmin_t, xmax_t)
+
+
+def denormalize_pitches_zscore(pitches_norm: torch.Tensor, mean: float = 7800.0, std: float = 1200.0) -> torch.Tensor:
+    """Desnormaliza pitches Z-score"""
+    mean_t = torch.as_tensor(mean, dtype=pitches_norm.dtype, device=pitches_norm.device)
+    std_t = torch.as_tensor(std, dtype=pitches_norm.dtype, device=pitches_norm.device).clamp(min=1e-8)
+    return pitches_norm * std_t + mean_t
+
+
+def denormalize_output(flat_out: torch.Tensor) -> torch.Tensor:
+    """
+    Reverte a normalização do vetor de saída (achatado) do modelo.
+    Aceita shape (20) ou (steps*20). Retorna tensor (steps, 20) no domínio original.
+    """
+    x = flat_out.view(-1, TARGET_FEATURES)  # (steps, 20)
+
+    # Pitches (Z-score -> cents)
+    x[:, 0:7] = denormalize_pitches_zscore(x[:, 0:7], mean=NORMALIZATION_RANGES['pitch']['min'] + (NORMALIZATION_RANGES['pitch']['max'] - NORMALIZATION_RANGES['pitch']['min'])/2.0, std=1200.0)
+
+    # Amplitudes (log [-1,1] -> [min,max])
+    x[:, 7:14] = denormalize_minus1_1(
+        x[:, 7:14],
+        NORMALIZATION_RANGES['amp']['min'],
+        NORMALIZATION_RANGES['amp']['max'],
+    )
+
+    # Metrônomos m1..m4 (log)
+    x[:, 14:18] = denormalize_minus1_1(
+        x[:, 14:18],
+        NORMALIZATION_RANGES['metro']['min'],
+        NORMALIZATION_RANGES['metro']['max'],
+    )
+
+    # Grain (log)
+    x[:, 18:19] = denormalize_minus1_1(
+        x[:, 18:19],
+        NORMALIZATION_RANGES['grain']['min'],
+        NORMALIZATION_RANGES['grain']['max'],
+    )
+
+    # Âmbito (linear)
+    x[:, 19:20] = denormalize_minus1_1(
+        x[:, 19:20],
+        NORMALIZATION_RANGES['ambito']['min'],
+        NORMALIZATION_RANGES['ambito']['max'],
+    )
+    return x
+
 
 # Cria tensores com os valores min/max para normalização
 _min_vals = []
@@ -66,12 +118,12 @@ TGT_RANGES[TGT_RANGES == 0] = 1.0
 
 # ====== PARÂMETROS MEL SPECTROGRAM ======
 
-audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/jet_whistle/')
-AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/jet_whistle/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
 
 
-# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
-# AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#5_G4_G#4_C#6-mf-N-N.wav')
+audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
+AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#5_G4_G#4_C#6-mf-N-N.wav')
 
 
 # audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/ordinario/')
@@ -80,6 +132,8 @@ AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
 
 # audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
 # AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
+
+CLASS_NAME = Path(AUDIO_PATH).parent.name
 
 
 SAMPLE_RATE = 44100
@@ -161,13 +215,24 @@ loaded_model.eval()
 # define número de steps de saída
 loaded_model.steps(1) 
 
-# z fictício para teste
-dummy_z = torch.randn(32) # média 0, std 1
+# # z para teste
+# dummy_z = torch.randn(32)* 0.5 + 1.0 # vetor z controlado
 
-loaded_model.latent(dummy_z) # seta z controlado
+
+
+# loaded_model.latent(dummy_z) # seta z controlado
 with torch.no_grad():
-        output = loaded_model.forwardz(mel_tensor)
-print(f"Output modelo: {output}")  # deve ser [1, N_TARGET_FEATURES]
+        output = loaded_model.forward(mel_tensor)
+# print(f"Model output for class {CLASS_NAME}: {output}")  # deve ser [1, N_TARGET_FEATURES]
+
+denorm_output = denormalize_output(output.squeeze(0))
+print(f"Output {CLASS_NAME} class")  # deve ser [N_TARGET_FEATURES]
+print(f"  Pitches (cents): {denorm_output[0, 0:7].numpy().round(1)}")
+print(f"  Amps (0-127):   {denorm_output[0, 7:14].numpy().round(1)}")
+print(f"  Metros (ms):    {denorm_output[0, 14:18].numpy().round(1)}")
+print(f"  Grain (ms):     {denorm_output[0, 18:19].numpy().round(1)}")
+print(f"  Âmbito:         {denorm_output[0, 19:20].numpy().round(1)}")
+
 
 
 

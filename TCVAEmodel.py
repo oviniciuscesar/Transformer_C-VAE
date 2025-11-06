@@ -286,47 +286,6 @@ class Encoder(nn.Module):
             x = layer(x, src_mask)
         return x  # (B, Ls, d_model)
 
-
-# # --- VAE Encoder (novo) ---
-# class VAEEncoder(nn.Module):
-#     """
-#     Codificador VAE:
-#     - Mapeia a sequência `tgt` (target) para os parâmetros
-#       do espaço latente (mu, logvar).
-#     - Usa um `Encoder` padrão para processar a sequência.
-#     - Usa pooling (média) para comprimir a sequência em um vetor.
-#     - Projeta o vetor para `mu` e `logvar`.
-#     """
-#     def __init__(self, num_layers: int, d_model: int, num_heads: int, d_ff: int, 
-#                  target_features: int, latent_dim: int, max_positions: int, dropout: float = 0.1) -> None:
-#         super().__init__()
-        
-#         # Encoder base (igual ao 'Encoder', mas projeta 'target_features')
-#         self.encoder_base = Encoder(
-#             num_layers, d_model, num_heads, d_ff, 
-#             target_features, max_positions, dropout
-#         )
-        
-#         # Camadas para projetar o vetor de contexto (pós-pooling) para mu e logvar
-#         self.fc_mu = nn.Linear(d_model, latent_dim)
-#         self.fc_logvar = nn.Linear(d_model, latent_dim)
-
-
-#     def forward(self, tgt: torch.Tensor, tgt_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-#         # tgt: (B, L, target_features)
-        
-#         # 1. Processa a sequência alvo com o encoder
-#         x = self.encoder_base(tgt, tgt_mask) # (B, L, d_model)
-        
-#         # 2. Pooling: Comprime a sequência em um vetor (média sobre a dimensão L)
-#         x = x.mean(dim=1) # (B, d_model)
-        
-#         # 3. Projeta para mu e logvar
-#         mu = self.fc_mu(x)       # (B, latent_dim)
-#         logvar = self.fc_logvar(x) # (B, latent_dim)
-        
-#         return mu, logvar
-
 class VAEEncoder(nn.Module):
     """
     Codificador VAE condicional:
@@ -383,8 +342,6 @@ class VAEEncoder(nn.Module):
         mu = self.fc_mu(x)
         logvar = self.fc_logvar(x)
         return mu, logvar
-
-
 
 
 # --- Decoder modificado ---
@@ -495,9 +452,26 @@ class TransformerCVAE(nn.Module):
         )
 
         # 4. Camada final (camada linear para projetar d_model -> target_features)
-        self.final_projection = nn.Linear(d_model, target_features)
+        # self.final_projection = nn.Linear(d_model, target_features)
+        self.final_projection = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, target_features)
+        )
 
-        # 5. ativação tanh na saída para garantir que os valores estejam entre -1å e 1
+        # Inicialização suave para não saturar o Tanh
+        for m in self.final_projection:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        # Reduz ligeiramente o ganho da última camada
+        if isinstance(self.final_projection[-1], nn.Linear):
+            nn.init.xavier_uniform_(self.final_projection[-1].weight, gain=0.5)
+
+        # 5. ativação tanh na saída para garantir que os valores estejam entre -1 e 1
         self.output_activation = nn.Tanh()
 
     # Cria máscara causal (look-ahead)
@@ -562,7 +536,7 @@ class TransformerCVAE(nn.Module):
         predictions = self.output_activation(predictions)
 
         # retorna as previsões, média e log-variância do espaço latente
-        return predictions, mu, logvar
+        return predictions, mu, logvar # []
 
 
 if __name__ == "__main__":

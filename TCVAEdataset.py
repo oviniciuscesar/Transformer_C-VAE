@@ -7,7 +7,8 @@ import torchaudio.transforms as T
 import numpy as np
 from pathlib import Path
 import librosa
-import json ### NOVO IMPORT ###
+import json 
+
 
 # Importa sua biblioteca
 try:
@@ -62,7 +63,7 @@ NORMALIZATION_RANGES = {
     # Features 0-6: Pitches (MIDI Cents)
     'pitch': {'min': 6000.0, 'max': 9600.0}, # três oitavas
     # Features 7-13: Amplitudes (MIDI Velocity)
-    'amp': {'min': 80.0, 'max': 127.0},
+    'amp': {'min': 0.0, 'max': 127.0},
     # Features 14-17: Metrônomos (ms)
     'metro': {'min': 100.0, 'max': 8000.0}, # 
     # Feature 18: Grain Size (ms)

@@ -18,6 +18,18 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 os.makedirs(DATASETS_DIR, exist_ok=True)
  
 
+# parâmetros do modelo
+ENCODER_LAYERS = 8
+DECODER_LAYERS = 8
+D_MODEL = 256
+D_FF = 512
+NUM_HEADS = 8
+LATENT_DIM = 32
+INPUT_FEATURES = 64  # features de entrada
+TARGET_FEATURES = 20  # features alvo
+SEQ_LEN = 10 # comprimento da sequência
+MAX_POS = 100 # número máximo de passos temporais 
+
 #-- Transformer C-VAE wrapper --
 class TcvaeWrapper(nn.Module):
     """
@@ -242,20 +254,14 @@ class TcvaeWrapper(nn.Module):
 
 
 if __name__ == "__main__": 
-    # 1. Parâmetros
-    INPUT_FEATURES = 64  # número de features de entrada
-    TARGET_FEATURES = 20   # número de features de saída
-    SEQ_LEN = 10          # comprimento da sequência de entrada
-    MAX_POS = 100         # posição máxima para o codificador
-    LATENT_DIM = 32       # dimensão do espaço latente
 
     # 2. Arquitetura do modelo
     model = TransformerCVAE(
-        num_layers_enc=2,
-        num_layers_dec=2,
-        d_model=64,
-        num_heads=2,
-        d_ff=128,
+        num_layers_enc=ENCODER_LAYERS,
+        num_layers_dec=DECODER_LAYERS,
+        d_model=D_MODEL,
+        num_heads=NUM_HEADS,
+        d_ff=D_FF,
         input_features=INPUT_FEATURES,
         target_features=TARGET_FEATURES,
         latent_dim=LATENT_DIM,

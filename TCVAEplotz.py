@@ -44,6 +44,18 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 
 DEVICE = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
+
+# parameters do modelo
+ENCODER_LAYERS = 8
+DECODER_LAYERS = 8
+D_MODEL = 256
+D_FF = 512
+NUM_HEADS = 8
+INPUT_FEATURES = 64  # features de entrada
+TARGET_FEATURES = 20  # features alvo
+SEQ_LEN = 10 # comprimento da sequência
+MAX_POS = 100 # número máximo de passos temporais
+
 # --- Parâmetros do Modelo (DEVE SER IDÊNTICO AO TREINAMENTO) ---
 INPUT_FEATURES = 64
 TARGET_FEATURES = 20
@@ -220,11 +232,11 @@ def main():
 
     # 2. Inicializar o Modelo (com a arquitetura exata do treino)
     model = TransformerCVAE(
-        num_layers_enc=2,
-        num_layers_dec=2,
-        d_model=64,
-        num_heads=2,
-        d_ff=128,
+        num_layers_enc=ENCODER_LAYERS,
+        num_layers_dec=DECODER_LAYERS,
+        d_model=D_MODEL,
+        num_heads=NUM_HEADS,
+        d_ff=D_FF,
         input_features=INPUT_FEATURES,
         target_features=TARGET_FEATURES,
         latent_dim=LATENT_DIM,

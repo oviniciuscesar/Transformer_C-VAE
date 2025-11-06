@@ -23,25 +23,27 @@ PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 # Configs
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
-# parâmetros de treinamento
-EPOCHS = 120
-BATCH_SIZE = 128
-LR = 1e-4
-CONDITION_DROPOUT_RATE = 0.1 # taxa de dropout para a condição (SRC)
-LATENT_DIM = 32
-BETA_START_EPOCH = 20
-BETA_WARMUP_EPOCHS = 50
-BETA_MAX = 0.2
-FREE_BITS_PER_DIM = 0.2
-
-# parameters
+# parameters do modelo
+ENCODER_LAYERS = 8
+DECODER_LAYERS = 8
+D_MODEL = 256
+D_FF = 512
+NUM_HEADS = 8
 INPUT_FEATURES = 64  # features de entrada
 TARGET_FEATURES = 20  # features alvo
 SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 100 # número máximo de passos temporais
 
-
-
+# parâmetros de treinamento
+EPOCHS = 160
+BATCH_SIZE = 128
+LR = 1e-4
+CONDITION_DROPOUT_RATE = 0.1 # taxa de dropout para a condição (SRC)
+LATENT_DIM = 32
+BETA_START_EPOCH = 40
+BETA_WARMUP_EPOCHS = 80
+BETA_MAX = 0.2
+FREE_BITS_PER_DIM = 0.02
 
 
 def set_random_seed(seed: int = SEED) -> None:
@@ -343,11 +345,11 @@ if __name__ == "__main__":
 
     # 2. model (Instancia TransformerCVAE)
     model = TransformerCVAE(
-        num_layers_enc=2, # Camadas para os encoders
-        num_layers_dec=2, # Camadas para o decoder
-        d_model=64, # Dimensão do modelo
-        num_heads=2, # Número de cabeças de atenção
-        d_ff=128, # Dimensão da camada de feedforward
+        num_layers_enc=ENCODER_LAYERS, # Camadas para os encoders
+        num_layers_dec=DECODER_LAYERS, # Camadas para o decoder
+        d_model=D_MODEL, # Dimensão do modelo
+        num_heads=NUM_HEADS, # Número de cabeças de atenção
+        d_ff=D_FF, # Dimensão da camada de feedforward
         input_features=INPUT_FEATURES, # Dimensão das features de entrada
         target_features=TARGET_FEATURES, # Dimensão das features de saída (alvo)
         latent_dim=LATENT_DIM, # dimensão do espaço latente do VAE 
