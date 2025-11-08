@@ -24,24 +24,24 @@ PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 # parameters do modelo
-ENCODER_LAYERS = 8
-DECODER_LAYERS = 8
-D_MODEL = 256
-D_FF = 512
-NUM_HEADS = 8
-INPUT_FEATURES = 64  # features de entrada
+ENCODER_LAYERS = 2
+DECODER_LAYERS = 2
+D_MODEL = 64
+D_FF = 128
+NUM_HEADS = 2
+INPUT_FEATURES = 80  # features de entrada
 TARGET_FEATURES = 20  # features alvo
 SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 100 # número máximo de passos temporais
 
 # parâmetros de treinamento
-EPOCHS = 160
-BATCH_SIZE = 128
+EPOCHS = 100
+BATCH_SIZE = 192
 LR = 1e-4
 CONDITION_DROPOUT_RATE = 0.1 # taxa de dropout para a condição (SRC)
-LATENT_DIM = 32
-BETA_START_EPOCH = 40
-BETA_WARMUP_EPOCHS = 80
+LATENT_DIM = 64
+BETA_START_EPOCH = 20
+BETA_WARMUP_EPOCHS = 50
 BETA_MAX = 0.2
 FREE_BITS_PER_DIM = 0.02
 

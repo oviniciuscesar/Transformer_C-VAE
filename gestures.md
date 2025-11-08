@@ -104,3 +104,13 @@ Após definir os valores-base, cada parâmetro é ajustado dinamicamente com bas
 
 O processo integra **características espectrais**, **dinâmicas** e **de textura** em uma representação padronizada (`tgt`) capaz de refletir tanto a **identidade sonora da classe** quanto as **particularidades do som analisado**.  
 Essa estrutura é essencial para tarefas de **síntese condicional**, **geração sonora guiada por aprendizado de máquina** ou **modelagem de timbre**.
+
+No treinamento:
+1 - O modelo recebe src (10 frames de 64 mel-spectrogramas) passo pelo conditional encoder para gerar o contexto C
+2 - O variational encoder recebe o contexto C e tgt_in e retrona o espaço latente(mu, logvar)
+3 - Mu, logvar são reparametrizados retornando Z
+4 - Descarta-se o último passo de tgt_in (teacher forcing)
+5 - O decoder recebe tgt_in (sem o último passo), Z e C,
+6 - A saída do decoder é projetada por uma camada linear e em seguida passa pela ativação tanh
+
+O problema é que na inferência em tempo real não temos tgt_in (features), somente src. Como lidar corretamente com essa situação na inferência com o wrapper?

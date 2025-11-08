@@ -19,13 +19,13 @@ os.makedirs(DATASETS_DIR, exist_ok=True)
  
 
 # parâmetros do modelo
-ENCODER_LAYERS = 8
-DECODER_LAYERS = 8
-D_MODEL = 256
-D_FF = 512
-NUM_HEADS = 8
-LATENT_DIM = 32
-INPUT_FEATURES = 64  # features de entrada
+ENCODER_LAYERS = 2
+DECODER_LAYERS = 2
+D_MODEL = 64
+D_FF = 128
+NUM_HEADS = 2
+LATENT_DIM = 64
+INPUT_FEATURES = 80  # features de entrada
 TARGET_FEATURES = 20  # features alvo
 SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 100 # número máximo de passos temporais 
@@ -113,6 +113,7 @@ class TcvaeWrapper(nn.Module):
         # marca que z foi definido
         self.z.fill_(1)
         return self.z_buffer
+    
 
     def generate(self, enc_out: torch.Tensor, z: torch.Tensor, start_vectors: torch.Tensor, max_length: int) -> torch.Tensor:
         """
@@ -138,7 +139,8 @@ class TcvaeWrapper(nn.Module):
         if L0 >= max_length:
             return start_vectors[:, :max_length, :].contiguous()
 
-        # 1. Encoder (JÁ FOI EXECUTADO)
+        # 1. Encoder (JÁ FOI EXECUTADO ANTES)
+
         # 2. Buffer de saída inicializado com zeros (esse é o tgt_in inicial do decoder)
         out_vectors = torch.zeros(B, max_length, F_out, dtype=enc_out.dtype, device=device)
         # pega os vetores iniciais (start_vectors)
@@ -189,7 +191,7 @@ class TcvaeWrapper(nn.Module):
         Retorna:
             - tensor achatado: (M) - M == max_length * target_features
         """
-        B = 1 # Batch size é 1 para inferência em tempo real
+        B = 1 # batch size é 1 para inferência em tempo real
         device = src.device
         dtype = src.dtype
 
@@ -199,8 +201,16 @@ class TcvaeWrapper(nn.Module):
         # 2. Gera Contexto a partir das features de entrada
         enc_out = self.transformer.conditional_encoder(src, None)
 
-        # 5. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
-        z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)  # amostra z aleatoriamente
+        # 3. Gera mu/logvar a partir do Contexto C
+        C_pooled = enc_out.mean(dim=1) # (batch, d_model)
+        mu = self.transformer.fc_mu(C_pooled)
+        logvar = self.transformer.fc_logvar(C_pooled)
+    
+        # 4. Amostra 'z' usando o truque de reparametrização 
+        z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
+
+        # # 5. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
+        # z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)  # amostra z aleatoriamente
         
         # 6. Cria vetor de início (zeros)
         start_vector = torch.zeros((B, 1, self.target_features), dtype=dtype, device=device)
@@ -239,7 +249,10 @@ class TcvaeWrapper(nn.Module):
             z = self.z_buffer.unsqueeze(0).to(device)  # [1, latent_dim]
             self.z.fill_(0)  # reseta o flag de z definido
         else:
-            z = torch.zeros(B, self.latent_dim, device=device, dtype=dtype)
+            C_pooled = enc_out.mean(dim=1)
+            mu = self.transformer.fc_mu(C_pooled)
+            logvar = self.transformer.fc_logvar(C_pooled)
+            z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
             
         # 4. Cria vetor de início (zeros)
         start_vector = torch.zeros((B, 1, self.target_features), dtype=dtype, device=device)
@@ -283,17 +296,18 @@ if __name__ == "__main__":
         
     model.eval()
     
-    scripted_model = torch.jit.script(model)
+    # scripted_model = torch.jit.script(model)
     
     # 4. Cria e scripta o Wrapper (passando latent_dim)
     wrapper = TcvaeWrapper(
-        scripted_model, 
+        model, # não scriptado ainda
         max_length=MAX_POS, 
         frames=SEQ_LEN, 
         input_features=INPUT_FEATURES, 
         target_features=TARGET_FEATURES,
         latent_dim=LATENT_DIM
     )
+    # scripta o wrapper com o modelo interno não scriptado
     scripted_wrapper = torch.jit.script(wrapper)
 
     # 5. Salva o modelo TorchScript

@@ -26,7 +26,7 @@ CSV_PATH = os.path.join(DATASET_DIR, 'FluteMetadata.csv')
 # --- Constantes Globais ---
 MELSPEC_PARAMS = {
     'sample_rate': 44100,
-    'n_mels': 64,
+    'n_mels': 80,
     'n_fft': 4096,
     'hop_length': 512,
     'fmin': 0.0,
@@ -131,6 +131,8 @@ class ContorchionistMelTransform:
         self.processor.set_verbose(bool(verbose)) #
 
     def __call__(self, signal):
+
+        
         audio = signal.squeeze().cpu().numpy().astype(np.float32) #
         frames = [] #
         block_size = self.processor.get_hop_length() #
@@ -207,7 +209,7 @@ def normalize_minus1_1(x: torch.Tensor, xmin: float = 0.0, xmax: float = 127.0) 
     - amps: tensor shape (..., 7)
     Retorna tensor normalizado com mesmo dtype/device.
     """
-    x_min = float(xmin) + 1e-8
+    x_min = float(xmin) + 1e-6
     x_max = float(xmax)
     x_clamped = torch.clamp(x, min=x_min, max=x_max)
     xmin_t = torch.as_tensor(xmin, dtype=x.dtype, device=x.device)
@@ -216,7 +218,7 @@ def normalize_minus1_1(x: torch.Tensor, xmin: float = 0.0, xmax: float = 127.0) 
     x_log = torch.log(x_clamped)
     min_log = torch.log(xmin_t + eps)
     max_log = torch.log(xmax_t)
-    denom = (max_log - min_log).clamp(min=1e-8)
+    denom = (max_log - min_log).clamp(min=1e-6)
     norm01 = (x_log - min_log) / denom
     return torch.clamp(norm01 * 2.0 - 1.0, -1.0, 1.0)
 
@@ -356,7 +358,7 @@ def calculate_temporal_targets(melspec_power, folder_name, global_factors, frame
         # tgt_amps = power_to_midi_velocity(top_k_values)
 
         # normaliza pitches e amps
-        tgt_cents = normalize_zscore(tgt_cents)
+        tgt_cents = normalize_minus1_1(tgt_cents, xmin=NORMALIZATION_RANGES['pitch']['min'], xmax=NORMALIZATION_RANGES['pitch']['max'])
         tgt_amps = normalize_minus1_1(tgt_amps, xmin=0, xmax=127.0)
 
         # 5. Textura com variação temporal 
@@ -463,83 +465,100 @@ def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito
 def get_process_params_for_label(seed: int, folder_name: str, duration_factor: float, 
                                  entropy_factor: float, brightness_factor: float) -> torch.Tensor:
     folder_name = folder_name.lower()
-    is_dense = False; is_sparse = False; is_dilated = False; is_contracted = False
+    is_dense = False; is_sparse = False; is_dilated = False; is_contracted = False; is_impulse = False; is_noisy = False; 
+    is_alure = False; is_evolutive = False;
 
     # definição das texturas por classe
     if 'aeolian' in folder_name: 
         is_sparse = True
         is_contracted = True
+        is_noisy = True
         print(f"  Classe '{folder_name}': Mapeada para Densa + Contraída")
 
     elif 'crescendo' in folder_name: 
         is_sparse = True
         is_dilated = True
+        is_evolutive = True
         print(f"  Classe '{folder_name}': Mapeada para Rarefeita + Dilatada") 
 
     elif 'crescendo_to_decrescendo' in folder_name: 
         is_sparse = True
         is_contracted = True
+        is_evolutive = True
         print(f"  Classe '{folder_name}': Mapeada para Rarefeita + Contraída")
 
     elif 'decrescendo' in folder_name: 
         is_dense = True
         is_dilated = True
+        is_evolutive = True
         print(f"  Classe '{folder_name}': Mapeada para Densa + Dilatada")
 
     elif 'flatterzunge' in folder_name: 
         is_dense = True
         is_contracted = True
+        is_alure = True
         print(f"  Classe '{folder_name}': Mapeada para Densa + Contraída")
 
     elif 'flatterzunge_to_ordinario' in folder_name: 
         is_dense = True
         is_dilated = True
+        is_evolutive = True
         print(f"  Classe '{folder_name}': Mapeada para Densa + Dilatada")  
 
     elif 'jet_whistle' in folder_name: 
         is_dense = True
         is_dilated = True
+        is_noisy = True 
         print(f"  Classe '{folder_name}': Mapeada para Densa + Dilatada")
 
     elif 'multiphonics' in folder_name: 
         is_sparse = True
         is_dilated = True
+        is_alure = True
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + Dilatada")
 
     elif 'ordinario' in folder_name: 
         is_sparse = True
         is_contracted = True
+        is_alure = True
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + Contraída")
 
     elif 'ordinario_to_flatterzunge' in folder_name: 
         is_dense = True
         is_dilated = True
+        is_evolutive = True
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + dilatada")
 
     elif 'sforzato' in folder_name: 
         is_sparse = True
         is_dilated = True
+        is_impulse = True
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + dilatada")
 
     elif 'staccato' in folder_name: 
         is_dense = True
         is_dilated = True
+        is_impulse = True
         print(f"  Classe '{folder_name}': Mapeada para densa + dilatada")
 
     elif 'tongue_ram-pizz' in folder_name: 
         is_dense = True
         is_contracted = True
+        is_impulse = True
         print(f"  Classe '{folder_name}': Mapeada para densa + contraída")
 
     elif 'trill' in folder_name: 
         is_dense = True
         is_dilated = True
+        is_alure = True
         print(f"  Classe '{folder_name}': Mapeada para densa + dilatada")
     
     # Define ranges baseados nas heurísticas
-    metro_min, metro_max = 100, 5000; grain_min, grain_max = 50, 1500; ambito_min, ambito_max = -100, 100
-    if is_dense: metro_min, metro_max = 100, 3000 
-    elif is_sparse: metro_min, metro_max = 2500, 8000
+    # metro_min, metro_max = 100, 5000; grain_min, grain_max = 50, 1500; ambito_min, ambito_max = -100, 100
+    if is_impulse: metro_min, metro_max = 100, 700
+    elif is_noisy: metro_min, metro_max = 1500, 3000
+    elif is_alure: metro_min, metro_max = 3000, 6000
+    elif is_evolutive: metro_min, metro_max = 5500, 8000
     if is_dilated: grain_min, grain_max = 500, 1500; ambito_min, ambito_max = 10, 100
     elif is_contracted: grain_min, grain_max = 50, 500; ambito_min, ambito_max = 65, 100
 
@@ -608,6 +627,8 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
             melspec_db = to_db(melspec_power.unsqueeze(0)).squeeze(0) # (64, L)
             total_frames = melspec_db.shape[1]
             if total_frames < N_FRAMES: continue
+
+            
 
             # 6. Aplicar Janela Deslizante
             for i in range(0, total_frames - N_FRAMES + 1, hop_step):
@@ -679,10 +700,10 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
         temp_tgt_tensor = torch.stack(all_tgt_samples) # Mantém no DEVICE
         temp_labels_tensor = torch.tensor(all_labels, device=DEVICE)
         
-        unique_labels = torch.unique(temp_labels_tensor).cpu().numpy()
+        unique_labels = torch.unique(temp_labels_tensor).sort().values
         label_to_folder = df.set_index('label')['folder'].to_dict()
 
-        for unique_label in sorted(unique_labels):
+        for unique_label in unique_labels.tolist():
             class_mask = (temp_labels_tensor == unique_label)
             class_tgts = temp_tgt_tensor[class_mask] # Amostras X 10 X 20
             

@@ -122,23 +122,27 @@ TGT_RANGES[TGT_RANGES == 0] = 1.0
 # AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
 
 
-audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
-AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#5_G4_G#4_C#6-mf-N-N.wav')
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/crescendo/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-cresc-A4-ppff-N-N.wav')
+
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#5_G4_G#4_C#6-mf-N-N.wav')
 
 
 # audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/ordinario/')
 # AUDIO_PATH = os.path.join(audio_dir, 'Fl-ord-A#q6-ff-N-N.wav')
 
 
-# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
-# AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
+audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
+AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
 
 CLASS_NAME = Path(AUDIO_PATH).parent.name
 
 
 SAMPLE_RATE = 44100
-N_MELS = 64
-N_FFT = 2048
+N_MELS = 80
+N_FFT = 4096
 HOP_LENGTH = 512
 FMIN = 0.0
 FMAX = SAMPLE_RATE // 2
@@ -219,7 +223,6 @@ loaded_model.steps(1)
 # dummy_z = torch.randn(32)* 0.5 + 1.0 # vetor z controlado
 
 
-
 # loaded_model.latent(dummy_z) # seta z controlado
 with torch.no_grad():
         output = loaded_model.forward(mel_tensor)
@@ -227,11 +230,18 @@ with torch.no_grad():
 
 denorm_output = denormalize_output(output.squeeze(0))
 print(f"Output {CLASS_NAME} class")  # deve ser [N_TARGET_FEATURES]
+print(f"---------- step: 0 -----------")
 print(f"  Pitches (cents): {denorm_output[0, 0:7].numpy().round(1)}")
 print(f"  Amps (0-127):   {denorm_output[0, 7:14].numpy().round(1)}")
 print(f"  Metros (ms):    {denorm_output[0, 14:18].numpy().round(1)}")
 print(f"  Grain (ms):     {denorm_output[0, 18:19].numpy().round(1)}")
 print(f"  Âmbito:         {denorm_output[0, 19:20].numpy().round(1)}")
+# print(f"---------- step: 1 -----------")
+# print(f"  Pitches (cents): {denorm_output[1, 0:7].numpy().round(1)}")
+# print(f"  Amps (0-127):   {denorm_output[1, 7:14].numpy().round(1)}")
+# print(f"  Metros (ms):    {denorm_output[1, 14:18].numpy().round(1)}")
+# print(f"  Grain (ms):     {denorm_output[1, 18:19].numpy().round(1)}")
+# print(f"  Âmbito:         {denorm_output[1, 19:20].numpy().round(1)}")
 
 
 
