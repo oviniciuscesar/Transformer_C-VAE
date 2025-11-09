@@ -118,8 +118,8 @@ TGT_RANGES[TGT_RANGES == 0] = 1.0
 
 # ====== PARÂMETROS MEL SPECTROGRAM ======
 
-# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/jet_whistle/')
-# AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
+audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/jet_whistle/')
+AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
 
 
 # audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/crescendo/')
@@ -134,8 +134,8 @@ TGT_RANGES[TGT_RANGES == 0] = 1.0
 # AUDIO_PATH = os.path.join(audio_dir, 'Fl-ord-A#q6-ff-N-N.wav')
 
 
-audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
-AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
 
 CLASS_NAME = Path(AUDIO_PATH).parent.name
 

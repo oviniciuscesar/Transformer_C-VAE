@@ -47,21 +47,21 @@ DEVICE = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 # parameters do modelo
 ENCODER_LAYERS = 2
-DECODER_LAYERS = 2
-D_MODEL = 64
-D_FF = 128
-NUM_HEADS = 2
-INPUT_FEATURES = 80 
- # features de entrada
-TARGET_FEATURES = 20  # features alvo
-SEQ_LEN = 10 # comprimento da sequência
-MAX_POS = 100 # número máximo de passos temporais
+DECODER_LAYERS = 1
+ENCODER_DROPOUT = 0.1
+DECODER_DROPOUT = 0.1
+FINAL_PROJ_DROPOUT = 0.1
+D_MODEL = 128
+ENCODER_D_FF = 256
+DECODER_D_FF = 64
+NUM_HEADS = 4
 
+ # features de entrada
 # --- Parâmetros do Modelo (DEVE SER IDÊNTICO AO TREINAMENTO) ---
 INPUT_FEATURES = 80
 TARGET_FEATURES = 20
 SEQ_LEN = 10 
-MAX_POS = 100
+MAX_POS = 10
 LATENT_DIM = 64
 N_FRAMES = 10 # Mantido para consistência (embora SEQ_LEN seja usado)
 
@@ -131,8 +131,8 @@ def plot_latent_space(model: TransformerCVAE, dataloader: DataLoader, device: to
             tgt = tgt.to(device) 
             
             # Passa pelo modelo para obter mu (com a nova arquitetura)
-            _ , mu, _ = model(src, tgt) 
-            
+            _ , mu, _ = model(src, tgt)
+
             all_mu.append(mu.cpu())
             all_labels.append(labels.cpu())
 
@@ -220,6 +220,76 @@ def plot_latent_space(model: TransformerCVAE, dataloader: DataLoader, device: to
         print(f"Erro ao salvar gráfico do espaço latente: {e}")
 
 
+# --- Análise de Dimensões Ativas ---
+def analyze_active_latent_dims(
+    model: TransformerCVAE,
+    dataloader: DataLoader,
+    device: torch.device,
+    var_threshold: float = 1e-3,
+    max_samples: int = 50000,
+    save_path: str | None = None,
+):
+    """
+    Coleta mu do espaço latente ao longo do dataset e reporta:
+    - variância por dimensão latente
+    - número de dimensões ativas (variância > var_threshold)
+    Opcionalmente salva um JSON com os resultados.
+    """
+    model.eval()
+    mus = []
+    n_collected = 0
+
+    print("Analisando dimensões ativas do espaço latente...")   
+    with torch.no_grad():
+        for src, tgt, _ in dataloader:
+            if n_collected >= max_samples:
+                break
+            src = src.to(device)
+            tgt = tgt.to(device)
+            # usa forward para obter mu/logvar (compatível com o seu modelo)
+            _, mu, logvar = model(src, tgt)  # mu: (B, latent_dim)
+            mus.append(mu.cpu())
+            n_collected += mu.size(0)
+
+            print(f"mu mean: {mu.mean().item():.4f} mu std: {mu.std().item():.4f}")
+            print(f"logvar mean: {logvar.mean().item():.4f} logvar std: {logvar.std().item():.4f}")
+
+    if not mus:
+        print("Nenhum mu coletado para análise das dimensões ativas.")
+        return None
+
+    mus_all = torch.cat(mus, dim=0)  # (N, latent_dim) em CPU
+    variances = mus_all.var(dim=0, unbiased=False)  # estável mesmo com poucos samples
+    active_mask = variances > var_threshold
+    active_count = int(active_mask.sum().item())
+    latent_dim = mus_all.size(1)
+
+    print("Variância por dimensão latente:")
+    print(", ".join(f"{v:.6f}" for v in variances.tolist()))
+    print(f"Dimensões ativas (> {var_threshold:g}): {active_count} / {latent_dim}")
+
+    results = {
+        "var_threshold": float(var_threshold),
+        "latent_dim": int(latent_dim),
+        "samples": int(mus_all.size(0)),
+        "variances": [float(v) for v in variances.tolist()],
+        "active_mask": [bool(b) for b in active_mask.tolist()],
+        "active_count": int(active_count),
+    }
+
+    if save_path:
+        try:
+            import json
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            with open(save_path, "w") as f:
+                json.dump(results, f, indent=2)
+            print(f"Resultados salvos em: {save_path}")
+        except Exception as e:
+            print(f"Falha ao salvar resultados em {save_path}: {e}")
+
+    return results
+
+
 def main():
     set_random_seed(SEED)
     print(f"Usando dispositivo: {DEVICE}")
@@ -237,12 +307,15 @@ def main():
         num_layers_dec=DECODER_LAYERS,
         d_model=D_MODEL,
         num_heads=NUM_HEADS,
-        d_ff=D_FF,
+        encoder_d_ff=ENCODER_D_FF,
+        decoder_d_ff=DECODER_D_FF,
         input_features=INPUT_FEATURES,
         target_features=TARGET_FEATURES,
         latent_dim=LATENT_DIM,
         max_pos=MAX_POS,
-        dropout=0.1,
+        encoder_dropout=ENCODER_DROPOUT,
+        decoder_dropout=DECODER_DROPOUT,
+        final_proj_dropout=FINAL_PROJ_DROPOUT,
     ).to(DEVICE)
     
     print("Arquitetura do modelo C-VAE criada.")
@@ -259,8 +332,19 @@ def main():
     except Exception as e:
         print(f"Erro ao carregar state_dict do modelo: {e}")
         return
+    
+    # 4. Análise das dimensões ativas do espaço latente
+    active_dims_path = os.path.join(PLOTS_DIR, "latent_active_dims.json")
+    analyze_active_latent_dims(
+        model=model,
+        dataloader=dataloader,
+        device=DEVICE,
+        var_threshold=1e-3,
+        max_samples=50000,
+        save_path=active_dims_path,
+    )
 
-    # 4. Chamar a função de plotagem
+    # 5. Chamar a função de plotagem
     plot_save_path_base = os.path.join(PLOTS_DIR, "latent_Z")
     plot_latent_space(model, dataloader, DEVICE, plot_save_path_base)
     

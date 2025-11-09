@@ -20,15 +20,21 @@ os.makedirs(DATASETS_DIR, exist_ok=True)
 
 # parâmetros do modelo
 ENCODER_LAYERS = 2
-DECODER_LAYERS = 2
-D_MODEL = 64
-D_FF = 128
-NUM_HEADS = 2
+DECODER_LAYERS = 1
 LATENT_DIM = 64
+NUM_HEADS = 4
+D_MODEL = 128
+ENCODER_D_FF = 256
+DECODER_D_FF = 64
+ENCODER_DROPOUT = 0.1
+DECODER_DROPOUT = 0.4
+FINAL_PROJ_DROPOUT = 0.2
+
+# tamanho das entradas/saídas
 INPUT_FEATURES = 80  # features de entrada
 TARGET_FEATURES = 20  # features alvo
 SEQ_LEN = 10 # comprimento da sequência
-MAX_POS = 100 # número máximo de passos temporais 
+MAX_POS = 10 # número máximo de passos temporais 
 
 #-- Transformer C-VAE wrapper --
 class TcvaeWrapper(nn.Module):
@@ -274,12 +280,15 @@ if __name__ == "__main__":
         num_layers_dec=DECODER_LAYERS,
         d_model=D_MODEL,
         num_heads=NUM_HEADS,
-        d_ff=D_FF,
+        encoder_d_ff=ENCODER_D_FF,
+        decoder_d_ff=DECODER_D_FF,
         input_features=INPUT_FEATURES,
         target_features=TARGET_FEATURES,
         latent_dim=LATENT_DIM,
         max_pos=MAX_POS,
-        dropout=0.1,
+        encoder_dropout=ENCODER_DROPOUT,
+        decoder_dropout=DECODER_DROPOUT,
+        final_proj_dropout=FINAL_PROJ_DROPOUT,
     )
     
     # 3. Carrega os pesos do modelo treinado
@@ -345,7 +354,7 @@ if __name__ == "__main__":
 
     # --- Teste 2: 'forwardz' (Geração Controlada) ---
     print("\n------ Teste 'forwardz' (z controlado) ------")
-    loaded_model.steps(50) # seta max_length para 50
+    loaded_model.steps(5) # seta max_length para 50
     loaded_model.latent(dummy_z) # seta z controlado
     with torch.no_grad():
         out_flat_z = loaded_model.forwardz(flat_src)
@@ -356,7 +365,7 @@ if __name__ == "__main__":
     print(f"Shape do input (features de entrada): {dummy_src.shape}")
     print(f"Shape do input (latente): {dummy_z.shape}")
     print(f"Shape da saída (features de saída): {out3_z.shape}")
-    assert out3_z.shape == (1, 50, TARGET_FEATURES)
+    assert out3_z.shape == (1, 5, TARGET_FEATURES)
     print("Teste 'forwardz' OK!")
 
     print("\nTeste de geração C-VAE concluído com sucesso!")

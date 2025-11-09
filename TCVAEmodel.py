@@ -422,12 +422,15 @@ class TransformerCVAE(nn.Module):
         num_layers_dec: int, # N layers para decoder
         d_model: int, # dimensão interna do modelo
         num_heads: int, # número de cabeças de atenção
-        d_ff: int, # dimensão da camada feed-forward
+        encoder_d_ff: int, # dimensão da camada feed-forward
+        decoder_d_ff: int, # dimensão da camada feed-forward do decoder
         input_features: int,  # features da flauta
         target_features: int, # features de saída (parâmetros da eletrônica)
         latent_dim: int,      # Dimensão do espaço latente z
         max_pos: int,       # comprimento máximo das sequências geradas
-        dropout: float = 0.1, # taxa de dropout
+        encoder_dropout: float = 0.1, # taxa de dropout
+        decoder_dropout: float = 0.1, # taxa de dropout
+        final_proj_dropout: float = 0.1, # taxa de dropout na camada final
     ) -> None:
         super().__init__()
         
@@ -436,8 +439,8 @@ class TransformerCVAE(nn.Module):
 
         # 1. Encoder Condicional (features de entrada -> Contexto (representação da entrada))
         self.conditional_encoder = Encoder(
-            num_layers_enc, d_model, num_heads, d_ff, 
-            input_features, max_pos, dropout
+            num_layers_enc, d_model, num_heads, encoder_d_ff, 
+            input_features, max_pos, encoder_dropout
         )
 
         #2. Encoder VAE (features de saída -> Espaço Latente)
@@ -451,18 +454,18 @@ class TransformerCVAE(nn.Module):
 
         # 3. Decoder ((tgt_in, z, C) -> Predição) tgt_in: target features de entrada, z: vetor latente, C: contexto das features de entrada
         self.decoder = Decoder(
-            num_layers_dec, d_model, num_heads, d_ff, 
-            target_features, latent_dim, max_pos, dropout
+            num_layers_dec, d_model, num_heads, decoder_d_ff, 
+            target_features, latent_dim, max_pos, decoder_dropout
         )
 
         # 4. Camada final (camada linear para projetar d_model -> target_features)
         # self.final_projection = nn.Linear(d_model, target_features)
         self.final_projection = nn.Sequential(
             nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, target_features)
+            nn.Linear(d_model, target_features),
+            # nn.GELU(),
+            # nn.Dropout(final_proj_dropout),
+            # nn.Linear(d_model, target_features)
         )
 
         # Inicialização suave para não saturar o Tanh
@@ -525,6 +528,7 @@ class TransformerCVAE(nn.Module):
         # 3. Gerar mu/logvar a partir do C_pooled (derivado do SRC)
         mu = self.fc_mu(C_pooled)       # (batch, latent_dim)
         logvar = self.fc_logvar(C_pooled) # (batch, latent_dim)
+        # logvar = torch.clamp(logvar, min=-4.0, max=4.0)
 
         # 4. Amostragem do espaço latente
         z = self.reparameterize(mu, logvar) # (batch, latent_dim)
@@ -556,7 +560,8 @@ if __name__ == "__main__":
     num_layers = 2
     d_model = 64
     num_heads = 4
-    d_ff = 128
+    encoder_d_ff = 128
+    decoder_d_ff = 128
 
     # Parâmetros
     input_features = 64  # features de entrada (melspectrograma, centroid, inarmonicidade, etc.)
@@ -571,7 +576,8 @@ if __name__ == "__main__":
         num_layers_dec=num_layers,
         d_model=d_model,
         num_heads=num_heads,
-        d_ff=d_ff,
+        encoder_d_ff=encoder_d_ff,
+        decoder_d_ff=decoder_d_ff,
         input_features=input_features,
         target_features=target_features,
         latent_dim=latent_dim,

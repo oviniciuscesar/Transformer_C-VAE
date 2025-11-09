@@ -23,27 +23,34 @@ PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 # Configs
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
-# parameters do modelo
+# arquitetura do modelo
 ENCODER_LAYERS = 2
-DECODER_LAYERS = 2
-D_MODEL = 64
-D_FF = 128
-NUM_HEADS = 2
+DECODER_LAYERS = 1
+LATENT_DIM = 64
+NUM_HEADS = 4
+D_MODEL = 128
+ENCODER_D_FF = 256
+DECODER_D_FF = 64
+ENCODER_DROPOUT = 0.1
+DECODER_DROPOUT = 0.2
+FINAL_PROJ_DROPOUT = 0.2
+
+# tamanho das entradas/saídas
 INPUT_FEATURES = 80  # features de entrada
 TARGET_FEATURES = 20  # features alvo
 SEQ_LEN = 10 # comprimento da sequência
-MAX_POS = 100 # número máximo de passos temporais
+MAX_POS = 10 # número máximo de passos temporais
 
 # parâmetros de treinamento
-EPOCHS = 100
+EPOCHS = 50
 BATCH_SIZE = 192
-LR = 1e-4
+LR = 5e-4
 CONDITION_DROPOUT_RATE = 0.1 # taxa de dropout para a condição (SRC)
-LATENT_DIM = 64
 BETA_START_EPOCH = 20
-BETA_WARMUP_EPOCHS = 50
-BETA_MAX = 0.2
-FREE_BITS_PER_DIM = 0.02
+BETA_WARMUP_EPOCHS = 30
+BETA_MAX = 0.3
+FREE_BITS_PER_DIM = 0.4
+LATENT_ACTIVE_THRESHOLD = 0.001  # limiar para considerar dimensão ativa
 
 
 def set_random_seed(seed: int = SEED) -> None:
@@ -178,6 +185,8 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
     kl_loss_accum = 0.0
     mu_mean_accum = 0.0  
     logvar_mean_accum = 0.0
+    latent_var_accum = 0.0
+    active_dims_accum = 0.0
     n_batches = 0
 
     # 1 - Loop sobre os batches
@@ -204,6 +213,11 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
         # passa 'src' (para ConditionalEncoder), 'tgt' (para VAEEncoder)
         predictions, mu, logvar = model(src=src, tgt=tgt)
 
+        mu_var_dims = torch.var(mu, dim=0, unbiased=False)  # (latent_dim)
+        latent_var_batch = mu_var_dims.mean().item()
+        active_dims_batch = (mu_var_dims > LATENT_ACTIVE_THRESHOLD).sum().item()
+
+
         # Obtém os componentes da perda
         total_loss, recon_loss, kl_loss_w = _calculate_loss(
             tgt_real, predictions, mu, logvar, 
@@ -220,15 +234,17 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
         kl_loss_accum += kl_loss_w.detach().cpu().item()  # Acumula a perda KL ponderada
         mu_mean_accum += mu.detach().mean().cpu().item() # acumula média de mu sobre batch e dim latente
         logvar_mean_accum += logvar.detach().mean().cpu().item() # acumula média de logvar sobre batch e dim latente
+        latent_var_accum += latent_var_batch
+        active_dims_accum += active_dims_batch
         n_batches += 1
         
     # Retorna as médias das três perdas e médias de mu/logvar sobre batches
     num_batches_safe = max(1, n_batches)
     return (total_loss_accum / num_batches_safe, recon_loss_accum / num_batches_safe, kl_loss_accum / num_batches_safe, mu_mean_accum / num_batches_safe,
-            logvar_mean_accum / num_batches_safe)
+            logvar_mean_accum / num_batches_safe, latent_var_accum / num_batches_safe, active_dims_accum / num_batches_safe)
 
 
-def plot_losses(history: Dict[str, List[float]], save_path: str):
+def plot_losses(history: Dict[str, List[float]], save_path: str) -> Dict[str, str]:
     """Gera e salva um gráfico das perdas e médias de mu/logvar."""
     epochs = range(1, len(history['total_loss']) + 1)
     
@@ -261,18 +277,42 @@ def plot_losses(history: Dict[str, List[float]], save_path: str):
 
     fig.tight_layout()  # Ajusta o layout para evitar sobreposição
     plt.title('Training Metrics per Epoch')
-    
+
+    # Plot latente
+    fig_lat, ax_lat = plt.subplots(figsize=(14, 5), dpi=200)
+    epochs_lat = range(1, len(history['latent_var']) + 1)
+    ax_lat.set_xlabel("Epoch")
+    ax_lat.set_ylabel("Mean latent variance")
+    ax_lat.plot(epochs_lat, history['latent_var'], color='tab:blue', label='Mean Var')
+    ax_lat.grid(True, linestyle='--', linewidth=0.5)
+    ax_dim = ax_lat.twinx()
+    ax_dim.set_ylabel("Active latent dims")
+    ax_dim.plot(epochs_lat, [int(x) for x in history['active_dims']], color='tab:orange', label='Active Dims')
+    # Legendas
+    lines_lat = ax_lat.get_lines() + ax_dim.get_lines()
+    labels_lat = [l.get_label() for l in lines_lat]
+    ax_lat.legend(lines_lat, labels_lat, loc='upper right')
+    fig_lat.tight_layout()
+
+    base, _ = os.path.splitext(save_path)
+    paths = {
+        "loss_png": base + ".png",
+        "loss_svg": base + ".svg",
+        "loss_pdf": base + ".pdf",
+        "latent_png": base + "_latent.png"
+    }
     try:
-        base, _ = os.path.splitext(save_path)
-        png_path = base + ".png"
-        svg_path = base + ".svg"
-        pdf_path = base + ".pdf"
-        fig.savefig(png_path, dpi=300, bbox_inches='tight', pad_inches=0.02)
-        fig.savefig(svg_path, format='svg', bbox_inches='tight')
-        fig.savefig(pdf_path, format='pdf', bbox_inches='tight')
-        print(f"Gráfico de métricas salvo em: {save_path}")
+        fig.savefig(paths["loss_png"], dpi=300, bbox_inches='tight', pad_inches=0.02)
+        fig.savefig(paths["loss_svg"], format='svg', bbox_inches='tight')
+        fig.savefig(paths["loss_pdf"], format='pdf', bbox_inches='tight')
+        fig_lat.savefig(paths["latent_png"], dpi=300, bbox_inches='tight', pad_inches=0.02)
+        print("Gráficos salvos:")
+        for k, v in paths.items():
+            print(f"  {k}: {v}")
     except Exception as e:
-        print(f"Erro ao salvar gráfico: {e}")
+        print(f"Erro ao salvar gráficos: {e}")
+
+    return paths
 
 
 # Função principal de treinamento- recebe: dataloader, modelo, número de épocas e dispositivo
@@ -291,7 +331,9 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
         'kl_recon_ratio': [],
         'kl_loss': [],
         'mu_mean': [],  
-        'logvar_mean': []
+        'logvar_mean': [],
+        'latent_var': [],
+        'active_dims': [],
     }
 
     # 2 - Loop de treinamento
@@ -306,7 +348,7 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
             current_beta = min(progress * BETA_MAX, BETA_MAX)
 
         # Treina uma época e obtém as três perdas médias e médias de mu/logvar
-        avg_total_loss, avg_recon_loss, avg_kl_loss, avg_mu_mean, avg_logvar_mean = train_one_epoch(
+        avg_total_loss, avg_recon_loss, avg_kl_loss, avg_mu_mean, avg_logvar_mean, avg_latent_var, avg_active_dims = train_one_epoch(
             train_loader, model, optimizer, device, 
             current_beta, FREE_BITS_PER_DIM, CONDITION_DROPOUT_RATE)
         
@@ -319,9 +361,11 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
         history['kl_loss'].append(avg_kl_loss)
         history['mu_mean'].append(avg_mu_mean)
         history['logvar_mean'].append(avg_logvar_mean)
+        history['latent_var'].append(avg_latent_var)
+        history['active_dims'].append(avg_active_dims)
 
         # Imprime as perdas e métricas da época
-        print(f"Epoch {epoch}/{epochs} | Loss={avg_total_loss:.6f} | Recon={avg_recon_loss:.6f} | KL={avg_kl_loss:.6f} | KL/Recon ratio={kl_recon_ratio:.4f} | Mu={avg_mu_mean:.4f} | LogVar={avg_logvar_mean:.4f} | beta={current_beta:.4f}")
+        print(f"Epoch {epoch}/{epochs} | Loss={avg_total_loss:.6f} | Recon={avg_recon_loss:.6f} | KL={avg_kl_loss:.6f} | KL/Recon ratio={kl_recon_ratio:.4f} | Mu={avg_mu_mean:.4f} | LogVar={avg_logvar_mean:.4f} | beta={current_beta:.4f} | Latent Var={avg_latent_var:.6f} | Active Dims={avg_active_dims:.6f}")
 
     # Após o treino, gera o gráfico
     plot_save_path = os.path.join(PLOTS_DIR, "training_metrics.png") # Salva em plots
@@ -349,12 +393,15 @@ if __name__ == "__main__":
         num_layers_dec=DECODER_LAYERS, # Camadas para o decoder
         d_model=D_MODEL, # Dimensão do modelo
         num_heads=NUM_HEADS, # Número de cabeças de atenção
-        d_ff=D_FF, # Dimensão da camada de feedforward
+        encoder_d_ff=ENCODER_D_FF, # Dimensão da camada de feedforward
+        decoder_d_ff=DECODER_D_FF, # Dimensão da camada de feedforward
         input_features=INPUT_FEATURES, # Dimensão das features de entrada
         target_features=TARGET_FEATURES, # Dimensão das features de saída (alvo)
         latent_dim=LATENT_DIM, # dimensão do espaço latente do VAE 
         max_pos=MAX_POS, # Posição máxima para embeddings
-        dropout=0.1, # Dropout
+        encoder_dropout=ENCODER_DROPOUT, # Dropout
+        decoder_dropout=DECODER_DROPOUT, # Dropout
+        final_proj_dropout=FINAL_PROJ_DROPOUT, # Dropout
     ).to(DEVICE) # Move para o dispositivo CPU/GPU
     
     print(f"Modelo Transformer C-VAE criado em {DEVICE}.")
