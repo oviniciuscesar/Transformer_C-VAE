@@ -227,11 +227,11 @@ def _calculate_loss(
 
 
 # Treinamento por época 
-def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device, current_beta: float, free_bits_per_dim: float, condition_dropout_rate: float) -> Tuple[float, float, float, float, float]:
+def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: torch.optim.Optimizer, device: torch.device, current_beta: float, free_bits_per_dim: float, condition_dropout_rate: float) -> Tuple[float, float, float, float, float, float, float, float, float]:
     model.train()
-    total_loss_accum = 0.0
-    recon_loss_accum = 0.0 
-    kl_loss_accum = 0.0
+    total_loss_acc = 0.0
+    recon_loss_acc = 0.0
+    kl_loss_acc = 0.0
     mu_mean_accum = 0.0  
     logvar_mean_accum = 0.0
     latent_var_accum = 0.0
@@ -240,7 +240,7 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
 
     # Para análise posterior (KL e Recon por amostra)
     all_kl_per_sample = []
-    all_recon_per_sample = []
+    # all_recon_per_sample = []
 
     # 1 - Loop sobre os batches
     for batch_idx, (src, tgt) in enumerate(dataloader):
@@ -297,7 +297,7 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
         kl_loss_acc += kl_loss_w.item()
     
         all_kl_per_sample.append(kl_per_sample.detach().cpu())
-        all_recon_per_sample.append(recon_per_sample.detach().cpu())
+        # all_recon_per_sample.append(recon_per_sample.detach().cpu())
 
         mu_mean_accum += posterior_mu.detach().mean().cpu().item() # acumula média de mu sobre batch e dim latente
         logvar_mean_accum += posterior_logvar.detach().mean().cpu().item() # acumula média de logvar sobre batch e dim latente
@@ -307,12 +307,14 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
 
     # Concatena tensores por amostra
     all_kl_per_sample = torch.cat(all_kl_per_sample, dim=0)
-    all_recon_per_sample = torch.cat(all_recon_per_sample, dim=0)
+    # all_recon_per_sample = torch.cat(all_recon_per_sample, dim=0)
+
+
 
 
     # Retorna as médias das três perdas e médias de mu/logvar sobre batches
     num_batches_safe = max(1, n_batches)
-    return (total_loss_accum / num_batches_safe, recon_loss_accum / num_batches_safe, kl_loss_accum / num_batches_safe, kl_per_sample, all_recon_per_sample, mu_mean_accum / num_batches_safe,
+    return (total_loss_acc / num_batches_safe, recon_loss_acc / num_batches_safe, kl_loss_acc / num_batches_safe, all_kl_per_sample.mean().item(), mu_mean_accum / num_batches_safe,
             logvar_mean_accum / num_batches_safe, latent_var_accum / num_batches_safe, active_dims_accum / num_batches_safe)
 
 
@@ -332,7 +334,6 @@ def plot_losses(history: Dict[str, List[float]], save_path: str) -> Dict[str, st
     ax1.plot(epochs, history['recon_loss'], color='tab:green', linestyle='--', label='Reconstruction Loss (Avg MSE)')
     ax1.plot(epochs, history['kl_loss'], color='tab:red', linestyle=':', label='Weighted KL Loss (Avg Beta*KL)')
     ax1.plot(epochs, history['kl_per_sample'], color='tab:cyan', linestyle='-.', label='KL per Sample')
-    ax1.plot(epochs, history['recon_per_sample'], color='tab:magenta', linestyle='-.', label='Recon per Sample')
     ax1.tick_params(axis='y', labelcolor=color)
     ax1.set_yscale('log') # Escala Log para perdas
     ax1.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5)
@@ -422,7 +423,7 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
             current_beta = min(progress * BETA_MAX, BETA_MAX)
 
         # Treina uma época e obtém as três perdas médias e médias de mu/logvar
-        avg_total_loss, avg_recon_loss, avg_kl_loss, kl_per_sample, all_recon_per_sample, avg_mu_mean, avg_logvar_mean, avg_latent_var, avg_active_dims = train_one_epoch(
+        avg_total_loss, avg_recon_loss, avg_kl_loss, avg_kl_per_sample, avg_mu_mean, avg_logvar_mean, avg_latent_var, avg_active_dims = train_one_epoch(
             train_loader, model, optimizer, device, 
             current_beta, FREE_BITS_PER_DIM, CONDITION_DROPOUT_RATE)
         
@@ -433,15 +434,17 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
         history['recon_loss'].append(avg_recon_loss)
         history['kl_recon_ratio'].append(kl_recon_ratio)
         history['kl_loss'].append(avg_kl_loss)
-        history['kl_per_sample'].append(kl_per_sample)
-        history['recon_per_sample'].append(all_recon_per_sample)
         history['mu_mean'].append(avg_mu_mean)
         history['logvar_mean'].append(avg_logvar_mean)
         history['latent_var'].append(avg_latent_var)
         history['active_dims'].append(avg_active_dims)
 
+        history.setdefault('kl_per_sample', []).append(avg_kl_per_sample)
+        
+
+
         # Imprime as perdas e métricas da época
-        print(f"Epoch {epoch}/{epochs} | Loss={avg_total_loss:.6f} | Recon={avg_recon_loss:.6f} | KL={avg_kl_loss:.6f} | KL_per_sample={kl_per_sample}| Recon_per_sample={all_recon_per_sample}| KL/Recon ratio={kl_recon_ratio:.4f} | Mu={avg_mu_mean:.4f} | LogVar={avg_logvar_mean:.4f} | beta={current_beta:.4f} | Latent Var={avg_latent_var:.6f} | Active Dims={avg_active_dims:.6f}")
+        print(f"Epoch {epoch}/{epochs}|Loss={avg_total_loss:.6f}|Recon={avg_recon_loss:.6f}|KL={avg_kl_loss:.6f}|KL/sample={avg_kl_per_sample:.4f}|KL/Recon ratio={kl_recon_ratio:.4f}|Mu={avg_mu_mean:.4f}|LogVar={avg_logvar_mean:.4f}|beta={current_beta:.4f}|Latent Var={avg_latent_var:.6f}|Active Dims={avg_active_dims:.6f}")
 
     # Após o treino, gera o gráfico
     plot_save_path = os.path.join(PLOTS_DIR, "training_metrics.png") # Salva em plots

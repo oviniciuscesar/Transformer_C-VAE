@@ -47,15 +47,15 @@ DEVICE = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 # parameters do modelo
 ENCODER_LAYERS = 3
-VAE_LAYERS = 3
+VAE_LAYERS = 1
 DECODER_LAYERS = 1
 ENCODER_DROPOUT = 0.1
 VAE_DROPOUT = 0.1
 DECODER_DROPOUT = 0.3
 FINAL_PROJ_DROPOUT = 0.2
 D_MODEL = 128
-ENCODER_D_FF =  512
-VAE_D_FF = 512
+ENCODER_D_FF = 256
+VAE_D_FF = 128
 DECODER_D_FF = 64
 NUM_HEADS = 4
 DECODER_HEADS = 2
@@ -66,7 +66,7 @@ INPUT_FEATURES = 80
 TARGET_FEATURES = 20
 SEQ_LEN = 10 
 MAX_POS = 10
-LATENT_DIM = 64
+LATENT_DIM = 32
 N_FRAMES = 10 # Mantido para consistência (embora SEQ_LEN seja usado)
 
 # --- Funções Auxiliares ---
