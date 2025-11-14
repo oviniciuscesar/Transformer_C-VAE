@@ -24,15 +24,23 @@ PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 # arquitetura do modelo
-ENCODER_LAYERS = 2
-DECODER_LAYERS = 1
-LATENT_DIM = 64
-NUM_HEADS = 4
-D_MODEL = 128
+# --- encoder, vae encoder ---
+ENCODER_LAYERS = 3
+VAE_LAYERS = 1
 ENCODER_D_FF = 256
+VAE_D_FF = 128
+NUM_HEADS = 4
+ENCODER_DROPOUT = 0.15
+VAE_DROPOUT = 0.05
+
+LATENT_DIM = 32
+D_MODEL = 128
+
+#--- decoder ---
+DECODER_LAYERS = 1
+DECODER_HEADS = 2
 DECODER_D_FF = 64
-ENCODER_DROPOUT = 0.1
-DECODER_DROPOUT = 0.2
+DECODER_DROPOUT = 0.55
 FINAL_PROJ_DROPOUT = 0.2
 
 # tamanho das entradas/saídas
@@ -42,14 +50,14 @@ SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 10 # número máximo de passos temporais
 
 # parâmetros de treinamento
-EPOCHS = 50
-BATCH_SIZE = 192
+EPOCHS = 150
+BATCH_SIZE = 256
 LR = 5e-4
-CONDITION_DROPOUT_RATE = 0.1 # taxa de dropout para a condição (SRC)
+CONDITION_DROPOUT_RATE = 0 # taxa de dropout para a condição (SRC)
 BETA_START_EPOCH = 20
-BETA_WARMUP_EPOCHS = 30
-BETA_MAX = 0.3
-FREE_BITS_PER_DIM = 0.4
+BETA_WARMUP_EPOCHS = 120
+BETA_MAX = 0.15
+FREE_BITS_PER_DIM = 2.0
 LATENT_ACTIVE_THRESHOLD = 0.001  # limiar para considerar dimensão ativa
 
 
@@ -72,6 +80,17 @@ def _worker_init_fn(worker_id: int) -> None:
     worker_seed = SEED + worker_id
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+def kl_diag(q_mu, q_logvar, p_mu, p_logvar, reduction='sum'):
+    q_var = torch.exp(q_logvar)
+    p_var = torch.exp(p_logvar)
+    term = p_logvar - q_logvar + (q_var + (q_mu - p_mu).pow(2)) / p_var - 1.0
+    kl = 0.5 * term
+    if reduction == 'sum':
+        return kl.sum()
+    elif reduction == 'mean':
+        return kl.mean()
+    return kl
 
 
 # Dummy Dataset class para geração de dados aleatórios para teste 
@@ -135,46 +154,76 @@ def load_pytorch_dataset(data_dir):
         exit(1)
 
 # calculo da função de perda ELBO - Evidence Lower Bound
-def _calculate_loss(real: torch.Tensor, pred: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor, beta: float, free_bits_per_dim: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _calculate_loss(
+    real: torch.Tensor,
+    pred: torch.Tensor,
+    posterior_mu: torch.Tensor,
+    posterior_logvar: torch.Tensor,
+    prior_mu: torch.Tensor,
+    prior_logvar: torch.Tensor,
+    beta: float,
+    free_bits_per_dim: float
+):
     """
-    Calcula a perda ELBO (Reconstruction + KL-Divergence) para o C-VAE.
-    real: (batch_size, T, features alvo) float (dados reais: dados de entrada)
-    pred: (batch_size, T, features alvo) float (predições do modelo)
-    mu: (batch_size, latent_dim) float (média do espaço latente)
-    logvar: (batch_size, latent_dim) float (log-variância do espaço latente)
-    beta: ponderação da perda KL (float)
-    return: perda total ELBO (float)
+    Calcula a perda ELBO de um Conditional VAE:
+        Reconstruction + β * KL(q(z|x,y) || p(z|x))
+
+    real: (B, T, F)
+    pred: (B, T, F)
+    posterior_mu, posterior_logvar: q(z|x,y)
+    prior_mu, prior_logvar:          p(z|x)
     """
-    # 1. Perda de Reconstrução (MSE)
-    # Usar 'sum' (comum em VAEs para balancear as perdas)
-    loss_fn = nn.MSELoss(reduction='mean')
-    recon_loss = loss_fn(pred, real) # média sobre batch*seq*feat
 
-    # 2. Perda KL-Divergence (regularização do espaço latente)
-    # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-    kl_loss_per_sample = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1) # (B)
+    # 1. Reconstruction loss
+    B = real.shape[0]
+    recon_element = nn.functional.mse_loss(pred, real, reduction='none')
+    recon_per_sample = recon_element.view(B, -1).sum(dim=1)  # (B,)
+    recon_loss = recon_per_sample.mean()  # média sobre batch
 
-    #3. Free bits regularization
-    free_bits_nats = free_bits_per_dim * torch.log(torch.tensor(2.0))
-    free_bits_nats = free_bits_nats.to(kl_loss_per_sample.device)  # move para o mesmo dispositivo
-    kl_loss_clamped = torch.clamp(kl_loss_per_sample, min=free_bits_nats)
-    # kl_loss_sum = torch.sum(kl_loss_clamped) # Soma sobre dims latentes
+    # 2. KL(q||p) entre gaussianas
+    # posterior: q ~ N(μ_q, σ_q^2)
+    # prior:     p ~ N(μ_p, σ_p^2)
 
-    # 4. Calcular perdas médias por elemento (para logging consistente)
-    # num_elements = pred.numel() # B * (L-1) * F_out
-    # recon_loss_avg = recon_loss_sum / num_elements
-    # kl_loss_weighted_avg = (beta * kl_loss_sum) / num_elements   
+    q_mu = posterior_mu
+    q_logvar = posterior_logvar
+    p_mu = prior_mu
+    p_logvar = prior_logvar
+
+    # sigma^2
+    q_var = q_logvar.exp()
+    p_var = p_logvar.exp()
+
+    # KL por dimensão:
+    # 0.5 * [ log(p_var/q_var) + (q_var + (q_mu-p_mu)^2)/p_var - 1 ]
+    kl_element = (
+        p_logvar - q_logvar
+        + (q_var + (q_mu - p_mu).pow(2)) / p_var
+        - 1.0
+    ) * 0.5
+
+    # # 3. Free-bits trick (por sample)
+    # free_bits_nats = free_bits_per_dim * torch.log(torch.tensor(2.0, device=kl_element.device))
+
+    if free_bits_per_dim is None or free_bits_per_dim <= 0.0:
+        kl_per_dim = kl_element  # sem clamp
+    else:
+        kl_per_dim = torch.clamp(kl_element, min=free_bits_per_dim)
+
+    kl_per_sample = kl_per_dim.sum(dim=1)  # (B,)
+    kl_loss = kl_per_sample.mean()
+
     
-    # # 5. Perda total ELBO
-    # total_loss_avg = recon_loss_avg + kl_loss_weighted_avg
+    # kl_clamped = torch.clamp(kl_per_sample, min=free_bits_nats)
+    # kl_clamped = kl_per_dim.sum(dim=1)  
 
-    kl_loss_avg = torch.mean(kl_loss_clamped) 
+    # # média para batch
+    # kl_loss = kl_clamped.mean()
 
-    # 4. Perda total ELBO (agora ambas são médias)
-    total_loss = recon_loss + (beta * kl_loss_avg)
+    # 4. Total ELBO
+    total_loss = recon_loss + beta * kl_loss
 
-    # Retorna as médias (KL agora está PONDERADO por beta)
-    return total_loss, recon_loss, (beta * kl_loss_avg)
+    # return total_loss, recon_loss, beta * kl_loss
+    return total_loss, recon_loss, beta * kl_loss, kl_per_sample.detach(), recon_per_sample.detach()
 
 
 # Treinamento por época 
@@ -188,6 +237,10 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
     latent_var_accum = 0.0
     active_dims_accum = 0.0
     n_batches = 0
+
+    # Para análise posterior (KL e Recon por amostra)
+    all_kl_per_sample = []
+    all_recon_per_sample = []
 
     # 1 - Loop sobre os batches
     for batch_idx, (src, tgt) in enumerate(dataloader):
@@ -209,19 +262,25 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
 
         optimizer.zero_grad()
 
-        # o modelo retorna 3 tensores: predictions [batch, SEQ_LEN-1, TARGET_FEATURES], mu [batch, latent_dim], logvar [batch, latent_dim]
-        # passa 'src' (para ConditionalEncoder), 'tgt' (para VAEEncoder)
-        predictions, mu, logvar = model(src=src, tgt=tgt)
+        # o modelo retorna 5 tensores: predictions [batch, SEQ_LEN-1, TARGET_FEATURES], posterior_mu, posterior_logvar, prior_mu, prior_logvar, z
+        posterior_mu, posterior_logvar, prior_mu, prior_logvar, z, predictions = model(src, tgt)
 
-        mu_var_dims = torch.var(mu, dim=0, unbiased=False)  # (latent_dim)
+
+        mu_var_dims = torch.var(posterior_mu, dim=0, unbiased=False)  # (latent_dim)
         latent_var_batch = mu_var_dims.mean().item()
         active_dims_batch = (mu_var_dims > LATENT_ACTIVE_THRESHOLD).sum().item()
 
 
         # Obtém os componentes da perda
-        total_loss, recon_loss, kl_loss_w = _calculate_loss(
-            tgt_real, predictions, mu, logvar, 
-            current_beta, free_bits_per_dim
+        total_loss, recon_loss, kl_loss_w, kl_per_sample, recon_per_sample = _calculate_loss(
+            real=tgt_real,
+            pred=predictions,
+            posterior_mu=posterior_mu,
+            posterior_logvar=posterior_logvar,
+            prior_mu=prior_mu,
+            prior_logvar=prior_logvar,
+            beta=current_beta,
+            free_bits_per_dim=free_bits_per_dim
         )
 
         # Usa a perda total para backpropagation
@@ -229,18 +288,31 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
         optimizer.step()
         
         # Acumula as perdas para a média da época
-        total_loss_accum += total_loss.detach().cpu().item() # Acumula a perda total
-        recon_loss_accum += recon_loss.detach().cpu().item() # Acumula a perda de reconstrução
-        kl_loss_accum += kl_loss_w.detach().cpu().item()  # Acumula a perda KL ponderada
-        mu_mean_accum += mu.detach().mean().cpu().item() # acumula média de mu sobre batch e dim latente
-        logvar_mean_accum += logvar.detach().mean().cpu().item() # acumula média de logvar sobre batch e dim latente
+        # total_loss_accum += total_loss.detach().cpu().item() # Acumula a perda total
+        # recon_loss_accum += recon_loss.detach().cpu().item() # Acumula a perda de reconstrução
+        # kl_loss_accum += kl_loss_w.detach().cpu().item()  # Acumula a perda KL ponderada
+
+        total_loss_acc += total_loss.item()
+        recon_loss_acc += recon_loss.item()
+        kl_loss_acc += kl_loss_w.item()
+    
+        all_kl_per_sample.append(kl_per_sample.detach().cpu())
+        all_recon_per_sample.append(recon_per_sample.detach().cpu())
+
+        mu_mean_accum += posterior_mu.detach().mean().cpu().item() # acumula média de mu sobre batch e dim latente
+        logvar_mean_accum += posterior_logvar.detach().mean().cpu().item() # acumula média de logvar sobre batch e dim latente
         latent_var_accum += latent_var_batch
         active_dims_accum += active_dims_batch
         n_batches += 1
-        
+
+    # Concatena tensores por amostra
+    all_kl_per_sample = torch.cat(all_kl_per_sample, dim=0)
+    all_recon_per_sample = torch.cat(all_recon_per_sample, dim=0)
+
+
     # Retorna as médias das três perdas e médias de mu/logvar sobre batches
     num_batches_safe = max(1, n_batches)
-    return (total_loss_accum / num_batches_safe, recon_loss_accum / num_batches_safe, kl_loss_accum / num_batches_safe, mu_mean_accum / num_batches_safe,
+    return (total_loss_accum / num_batches_safe, recon_loss_accum / num_batches_safe, kl_loss_accum / num_batches_safe, kl_per_sample, all_recon_per_sample, mu_mean_accum / num_batches_safe,
             logvar_mean_accum / num_batches_safe, latent_var_accum / num_batches_safe, active_dims_accum / num_batches_safe)
 
 
@@ -259,6 +331,8 @@ def plot_losses(history: Dict[str, List[float]], save_path: str) -> Dict[str, st
     ax1.plot(epochs, history['total_loss'], color=color, linestyle='-', label='Total Loss (Avg ELBO)')
     ax1.plot(epochs, history['recon_loss'], color='tab:green', linestyle='--', label='Reconstruction Loss (Avg MSE)')
     ax1.plot(epochs, history['kl_loss'], color='tab:red', linestyle=':', label='Weighted KL Loss (Avg Beta*KL)')
+    ax1.plot(epochs, history['kl_per_sample'], color='tab:cyan', linestyle='-.', label='KL per Sample')
+    ax1.plot(epochs, history['recon_per_sample'], color='tab:magenta', linestyle='-.', label='Recon per Sample')
     ax1.tick_params(axis='y', labelcolor=color)
     ax1.set_yscale('log') # Escala Log para perdas
     ax1.grid(True, which='both', axis='y', linestyle='--', linewidth=0.5)
@@ -348,7 +422,7 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
             current_beta = min(progress * BETA_MAX, BETA_MAX)
 
         # Treina uma época e obtém as três perdas médias e médias de mu/logvar
-        avg_total_loss, avg_recon_loss, avg_kl_loss, avg_mu_mean, avg_logvar_mean, avg_latent_var, avg_active_dims = train_one_epoch(
+        avg_total_loss, avg_recon_loss, avg_kl_loss, kl_per_sample, all_recon_per_sample, avg_mu_mean, avg_logvar_mean, avg_latent_var, avg_active_dims = train_one_epoch(
             train_loader, model, optimizer, device, 
             current_beta, FREE_BITS_PER_DIM, CONDITION_DROPOUT_RATE)
         
@@ -359,13 +433,15 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
         history['recon_loss'].append(avg_recon_loss)
         history['kl_recon_ratio'].append(kl_recon_ratio)
         history['kl_loss'].append(avg_kl_loss)
+        history['kl_per_sample'].append(kl_per_sample)
+        history['recon_per_sample'].append(all_recon_per_sample)
         history['mu_mean'].append(avg_mu_mean)
         history['logvar_mean'].append(avg_logvar_mean)
         history['latent_var'].append(avg_latent_var)
         history['active_dims'].append(avg_active_dims)
 
         # Imprime as perdas e métricas da época
-        print(f"Epoch {epoch}/{epochs} | Loss={avg_total_loss:.6f} | Recon={avg_recon_loss:.6f} | KL={avg_kl_loss:.6f} | KL/Recon ratio={kl_recon_ratio:.4f} | Mu={avg_mu_mean:.4f} | LogVar={avg_logvar_mean:.4f} | beta={current_beta:.4f} | Latent Var={avg_latent_var:.6f} | Active Dims={avg_active_dims:.6f}")
+        print(f"Epoch {epoch}/{epochs} | Loss={avg_total_loss:.6f} | Recon={avg_recon_loss:.6f} | KL={avg_kl_loss:.6f} | KL_per_sample={kl_per_sample}| Recon_per_sample={all_recon_per_sample}| KL/Recon ratio={kl_recon_ratio:.4f} | Mu={avg_mu_mean:.4f} | LogVar={avg_logvar_mean:.4f} | beta={current_beta:.4f} | Latent Var={avg_latent_var:.6f} | Active Dims={avg_active_dims:.6f}")
 
     # Após o treino, gera o gráfico
     plot_save_path = os.path.join(PLOTS_DIR, "training_metrics.png") # Salva em plots
@@ -390,16 +466,20 @@ if __name__ == "__main__":
     # 2. model (Instancia TransformerCVAE)
     model = TransformerCVAE(
         num_layers_enc=ENCODER_LAYERS, # Camadas para os encoders
+        num_layers_vae=VAE_LAYERS, # Camadas para o VAE encoder
         num_layers_dec=DECODER_LAYERS, # Camadas para o decoder
         d_model=D_MODEL, # Dimensão do modelo
         num_heads=NUM_HEADS, # Número de cabeças de atenção
+        decoder_num_heads=DECODER_HEADS, # Número de cabeças de atenção do decoder
         encoder_d_ff=ENCODER_D_FF, # Dimensão da camada de feedforward
+        vaencoder_d_ff=VAE_D_FF, # Dimensão da camada de feedforward do VAE
         decoder_d_ff=DECODER_D_FF, # Dimensão da camada de feedforward
         input_features=INPUT_FEATURES, # Dimensão das features de entrada
         target_features=TARGET_FEATURES, # Dimensão das features de saída (alvo)
         latent_dim=LATENT_DIM, # dimensão do espaço latente do VAE 
         max_pos=MAX_POS, # Posição máxima para embeddings
         encoder_dropout=ENCODER_DROPOUT, # Dropout
+        vae_dropout=VAE_DROPOUT, # Dropout do VAE
         decoder_dropout=DECODER_DROPOUT, # Dropout
         final_proj_dropout=FINAL_PROJ_DROPOUT, # Dropout
     ).to(DEVICE) # Move para o dispositivo CPU/GPU

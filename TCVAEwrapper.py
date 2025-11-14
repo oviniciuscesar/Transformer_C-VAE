@@ -19,14 +19,18 @@ os.makedirs(DATASETS_DIR, exist_ok=True)
  
 
 # parâmetros do modelo
-ENCODER_LAYERS = 2
+ENCODER_LAYERS = 3
+VAE_LAYERS = 3
 DECODER_LAYERS = 1
 LATENT_DIM = 64
 NUM_HEADS = 4
+DECODER_HEADS = 2
 D_MODEL = 128
-ENCODER_D_FF = 256
+ENCODER_D_FF = 512
+VAE_D_FF = 512
 DECODER_D_FF = 64
 ENCODER_DROPOUT = 0.1
+VAE_DROPOUT = 0.1
 DECODER_DROPOUT = 0.4
 FINAL_PROJ_DROPOUT = 0.2
 
@@ -207,13 +211,13 @@ class TcvaeWrapper(nn.Module):
         # 2. Gera Contexto a partir das features de entrada
         enc_out = self.transformer.conditional_encoder(src, None)
 
-        # 3. Gera mu/logvar a partir do Contexto C
+        # 3. Gera mu/logvar a partir do Contexto C - usa prior treinado
         C_pooled = enc_out.mean(dim=1) # (batch, d_model)
-        mu = self.transformer.fc_mu(C_pooled)
-        logvar = self.transformer.fc_logvar(C_pooled)
-    
+        prior_mu = self.transformer.prior_mu(C_pooled)
+        prior_logvar = self.transformer.prior_logvar(C_pooled)
+        
         # 4. Amostra 'z' usando o truque de reparametrização 
-        z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
+        z = self.transformer.reparameterize(prior_mu, prior_logvar)
 
         # # 5. Amostra 'z' aleatoriamente (o núcleo VAE) [batch, latent_dim]
         # z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)  # amostra z aleatoriamente
@@ -255,10 +259,13 @@ class TcvaeWrapper(nn.Module):
             z = self.z_buffer.unsqueeze(0).to(device)  # [1, latent_dim]
             self.z.fill_(0)  # reseta o flag de z definido
         else:
-            C_pooled = enc_out.mean(dim=1)
-            mu = self.transformer.fc_mu(C_pooled)
-            logvar = self.transformer.fc_logvar(C_pooled)
-            z = self.transformer.reparameterize(mu, logvar) # (batch, latent_dim)
+            C_pooled = enc_out.mean(dim=1)  # (B, d_model)
+            if hasattr(self.transformer, "prior_mu") and hasattr(self.transformer, "prior_logvar"):
+                prior_mu = self.transformer.prior_mu(C_pooled)
+                prior_logvar = self.transformer.prior_logvar(C_pooled)
+                z = self.transformer.reparameterize(prior_mu, prior_logvar)  # (B, latent_dim)
+            else:
+                z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)  # fallback
             
         # 4. Cria vetor de início (zeros)
         start_vector = torch.zeros((B, 1, self.target_features), dtype=dtype, device=device)
@@ -277,16 +284,20 @@ if __name__ == "__main__":
     # 2. Arquitetura do modelo
     model = TransformerCVAE(
         num_layers_enc=ENCODER_LAYERS,
+        num_layers_vae=VAE_LAYERS,
         num_layers_dec=DECODER_LAYERS,
         d_model=D_MODEL,
         num_heads=NUM_HEADS,
+        decoder_num_heads=DECODER_HEADS,
         encoder_d_ff=ENCODER_D_FF,
+        vaencoder_d_ff=VAE_D_FF,
         decoder_d_ff=DECODER_D_FF,
         input_features=INPUT_FEATURES,
         target_features=TARGET_FEATURES,
         latent_dim=LATENT_DIM,
         max_pos=MAX_POS,
         encoder_dropout=ENCODER_DROPOUT,
+        vae_dropout=VAE_DROPOUT,
         decoder_dropout=DECODER_DROPOUT,
         final_proj_dropout=FINAL_PROJ_DROPOUT,
     )
@@ -340,7 +351,7 @@ if __name__ == "__main__":
 
     # --- Teste 1: 'forward' (Geração Aleatória) ---
     print("\n------ Teste 'forward' (z aleatório) ------")
-    loaded_model.steps(10) # seta max_length para 10
+    loaded_model.steps(2) # seta max_length para 10
     with torch.no_grad():
         out_flat_random = loaded_model.forward(flat_src)
     
@@ -349,12 +360,12 @@ if __name__ == "__main__":
 
     print(f"Shape do input (features de entrada): {dummy_src.shape}")
     print(f"Shape da saída (features de saída): {out3_random.shape}")
-    assert out3_random.shape == (1, 10, TARGET_FEATURES)
+    assert out3_random.shape == (1, 2, TARGET_FEATURES)
     print("Teste 'forward' OK!")
 
     # --- Teste 2: 'forwardz' (Geração Controlada) ---
     print("\n------ Teste 'forwardz' (z controlado) ------")
-    loaded_model.steps(5) # seta max_length para 50
+    loaded_model.steps(10) # seta max_length para 50
     loaded_model.latent(dummy_z) # seta z controlado
     with torch.no_grad():
         out_flat_z = loaded_model.forwardz(flat_src)
@@ -365,7 +376,7 @@ if __name__ == "__main__":
     print(f"Shape do input (features de entrada): {dummy_src.shape}")
     print(f"Shape do input (latente): {dummy_z.shape}")
     print(f"Shape da saída (features de saída): {out3_z.shape}")
-    assert out3_z.shape == (1, 5, TARGET_FEATURES)
+    assert out3_z.shape == (1, 10, TARGET_FEATURES)
     print("Teste 'forwardz' OK!")
 
     print("\nTeste de geração C-VAE concluído com sucesso!")

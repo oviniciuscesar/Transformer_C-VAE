@@ -46,15 +46,19 @@ DEVICE = 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 
 # parameters do modelo
-ENCODER_LAYERS = 2
+ENCODER_LAYERS = 3
+VAE_LAYERS = 3
 DECODER_LAYERS = 1
 ENCODER_DROPOUT = 0.1
-DECODER_DROPOUT = 0.1
-FINAL_PROJ_DROPOUT = 0.1
+VAE_DROPOUT = 0.1
+DECODER_DROPOUT = 0.3
+FINAL_PROJ_DROPOUT = 0.2
 D_MODEL = 128
-ENCODER_D_FF = 256
+ENCODER_D_FF =  512
+VAE_D_FF = 512
 DECODER_D_FF = 64
 NUM_HEADS = 4
+DECODER_HEADS = 2
 
  # features de entrada
 # --- Parâmetros do Modelo (DEVE SER IDÊNTICO AO TREINAMENTO) ---
@@ -131,9 +135,9 @@ def plot_latent_space(model: TransformerCVAE, dataloader: DataLoader, device: to
             tgt = tgt.to(device) 
             
             # Passa pelo modelo para obter mu (com a nova arquitetura)
-            _ , mu, _ = model(src, tgt)
+            posterior_mu, posterior_logvar, _, _, _, _  = model(src, tgt)
 
-            all_mu.append(mu.cpu())
+            all_mu.append(posterior_mu.cpu())
             all_labels.append(labels.cpu())
 
     mu_tensor = torch.cat(all_mu, dim=0).numpy()
@@ -247,12 +251,12 @@ def analyze_active_latent_dims(
             src = src.to(device)
             tgt = tgt.to(device)
             # usa forward para obter mu/logvar (compatível com o seu modelo)
-            _, mu, logvar = model(src, tgt)  # mu: (B, latent_dim)
-            mus.append(mu.cpu())
-            n_collected += mu.size(0)
+            posterior_mu, posterior_logvar, _, _, _, _  = model(src, tgt)  # mu: (B, latent_dim)
+            mus.append(posterior_mu.cpu())
+            n_collected += posterior_mu.size(0)
 
-            print(f"mu mean: {mu.mean().item():.4f} mu std: {mu.std().item():.4f}")
-            print(f"logvar mean: {logvar.mean().item():.4f} logvar std: {logvar.std().item():.4f}")
+            print(f"mu mean: {posterior_mu.mean().item():.4f} mu std: {posterior_mu.std().item():.4f}")
+            print(f"logvar mean: {posterior_logvar.mean().item():.4f} logvar std: {posterior_logvar.std().item():.4f}")
 
     if not mus:
         print("Nenhum mu coletado para análise das dimensões ativas.")
@@ -304,17 +308,21 @@ def main():
     # 2. Inicializar o Modelo (com a arquitetura exata do treino)
     model = TransformerCVAE(
         num_layers_enc=ENCODER_LAYERS,
+        num_layers_vae=VAE_LAYERS,
         num_layers_dec=DECODER_LAYERS,
         d_model=D_MODEL,
         num_heads=NUM_HEADS,
+        decoder_num_heads=DECODER_HEADS,
         encoder_d_ff=ENCODER_D_FF,
         decoder_d_ff=DECODER_D_FF,
         input_features=INPUT_FEATURES,
         target_features=TARGET_FEATURES,
         latent_dim=LATENT_DIM,
+        vaencoder_d_ff=VAE_D_FF,
         max_pos=MAX_POS,
         encoder_dropout=ENCODER_DROPOUT,
         decoder_dropout=DECODER_DROPOUT,
+        vae_dropout=VAE_DROPOUT,
         final_proj_dropout=FINAL_PROJ_DROPOUT,
     ).to(DEVICE)
     

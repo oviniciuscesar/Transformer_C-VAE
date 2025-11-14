@@ -8,6 +8,7 @@ import numpy as np
 from pathlib import Path
 import librosa
 import json 
+import random
 from TCVAEdataset import NORMALIZATION_RANGES
 
 # Importa sua biblioteca
@@ -17,8 +18,36 @@ except ImportError:
     print("Erro: Não foi possível importar o módulo pycontorchionist.")
     exit(1)
 
+SEED = 42
+random.seed(SEED)
+
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(DIRECTORY, "TorchScript")
+FLUTE_DIR = os.path.join(DIRECTORY, "Flute")
+RUN_BATCH_PER_CLASS = False  # defina True para rodar 1 exemplo aleatório por classe
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/jet_whistle/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/crescendo/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-cresc-A4-ppff-N-N.wav')
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#5_G4_G#4_C#6-mf-N-N.wav')
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/ordinario/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-ord-A#q6-ff-N-N.wav')
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
+
+# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/staccato/')
+# AUDIO_PATH = os.path.join(audio_dir, 'Fl-stacc-A#4-mf-N-R100d.wav')
+audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/crescendo_to_decrescendo/')
+AUDIO_PATH = os.path.join(audio_dir, 'Fl-cre_dec-B3-ppmfpp-N-N.wav')
+
+CLASS_NAME = Path(AUDIO_PATH).parent.name
+
 
 # Parâmetros do Modelo (targets)
 N_FRAMES = 10       # 10 frames de melspectrograma
@@ -96,6 +125,16 @@ def denormalize_output(flat_out: torch.Tensor) -> torch.Tensor:
     return x
 
 
+# ====== Utilidades de áudio/mel ======
+def load_audio(path: str, target_sr: int) -> np.ndarray:
+    waveform, sr = torchaudio.load(path)
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    if sr != target_sr:
+        waveform = torchaudio.functional.resample(waveform, sr, target_sr)
+    return waveform.squeeze().numpy()
+
+
 # Cria tensores com os valores min/max para normalização
 _min_vals = []
 _max_vals = []
@@ -117,29 +156,6 @@ TGT_RANGES = TGT_MAX_VALS - TGT_MIN_VALS
 TGT_RANGES[TGT_RANGES == 0] = 1.0
 
 # ====== PARÂMETROS MEL SPECTROGRAM ======
-
-audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/jet_whistle/')
-AUDIO_PATH = os.path.join(audio_dir, 'Fl-jet_wh-N-N-N-N.wav')
-
-
-# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/crescendo/')
-# AUDIO_PATH = os.path.join(audio_dir, 'Fl-cresc-A4-ppff-N-N.wav')
-
-
-# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/multiphonics/')
-# AUDIO_PATH = os.path.join(audio_dir, 'Fl-mul-A#5_G4_G#4_C#6-mf-N-N.wav')
-
-
-# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/ordinario/')
-# AUDIO_PATH = os.path.join(audio_dir, 'Fl-ord-A#q6-ff-N-N.wav')
-
-
-# audio_dir = os.path.join(os.path.dirname(__file__), 'Flute/tongue_ram-pizz/')
-# AUDIO_PATH = os.path.join(audio_dir, 'Fl-pizz-B3-f-N-N.wav')
-
-CLASS_NAME = Path(AUDIO_PATH).parent.name
-
-
 SAMPLE_RATE = 44100
 N_MELS = 80
 N_FFT = 4096
@@ -155,14 +171,14 @@ UNIT = 'MAGPHASE'  # Formato de saída do espectro
 print(f"Parâmetros: {SAMPLE_RATE}, {N_MELS}, {N_FFT}, {HOP_LENGTH}, {FMIN}, {FMAX}, {MEL_NORM}, {MEL_MODE}, {NORM}, {MEL_FORMULA}, {WINDOW_TYPE}, {UNIT} ({cc.mel_norm_mode_to_string(MEL_MODE)})")
 
 
-# # ====== CARREGAR ÁUDIO ======
-waveform, sr = torchaudio.load(AUDIO_PATH)
-if waveform.shape[0] > 1:
-    waveform = waveform.mean(dim=0, keepdim=True)  # Mono
-waveform = torchaudio.functional.resample(waveform, sr, SAMPLE_RATE)
-audio = waveform.squeeze().numpy()
+# # # ====== CARREGAR ÁUDIO ======
+# waveform, sr = torchaudio.load(AUDIO_PATH)
+# if waveform.shape[0] > 1:
+#     waveform = waveform.mean(dim=0, keepdim=True)  # Mono
+# waveform = torchaudio.functional.resample(waveform, sr, SAMPLE_RATE)
+# audio = waveform.squeeze().numpy()
 
-print(f"Áudio carregado: {audio.shape}, SR={SAMPLE_RATE}")
+# print(f"Áudio carregado: {audio.shape}, SR={SAMPLE_RATE}")
 
 # ====== MEL SPECTROGRAM PYTORCH ======
 mel_torch = torchaudio.transforms.MelSpectrogram(
