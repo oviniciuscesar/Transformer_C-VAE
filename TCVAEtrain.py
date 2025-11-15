@@ -40,7 +40,7 @@ D_MODEL = 128
 DECODER_LAYERS = 1
 DECODER_HEADS = 2
 DECODER_D_FF = 64
-DECODER_DROPOUT = 0.55
+DECODER_DROPOUT = 0.3
 FINAL_PROJ_DROPOUT = 0.2
 
 # tamanho das entradas/saídas
@@ -57,7 +57,7 @@ CONDITION_DROPOUT_RATE = 0 # taxa de dropout para a condição (SRC)
 BETA_START_EPOCH = 20
 BETA_WARMUP_EPOCHS = 120
 BETA_MAX = 0.15
-FREE_BITS_PER_DIM = 2.0
+FREE_BITS_PER_DIM = 0.05
 LATENT_ACTIVE_THRESHOLD = 0.001  # limiar para considerar dimensão ativa
 
 

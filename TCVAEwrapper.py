@@ -212,10 +212,11 @@ class TcvaeWrapper(nn.Module):
         enc_out = self.transformer.conditional_encoder(src, None)
 
         # 3. Gera mu/logvar a partir do Contexto C - usa prior treinado
-        C_pooled = enc_out.mean(dim=1) # (batch, d_model)
-        prior_mu = self.transformer.prior_mu(C_pooled)
-        prior_logvar = self.transformer.prior_logvar(C_pooled)
-        
+        C = enc_out # (batch, d_model)
+        prior_mu, prior_logvar = self.transformer.prior(C)
+        # clamp para evitar valores extremos
+        prior_logvar = prior_logvar.clamp(-12., 5.)
+
         # 4. Amostra 'z' usando o truque de reparametrização 
         z = self.transformer.reparameterize(prior_mu, prior_logvar)
 
@@ -259,10 +260,12 @@ class TcvaeWrapper(nn.Module):
             z = self.z_buffer.unsqueeze(0).to(device)  # [1, latent_dim]
             self.z.fill_(0)  # reseta o flag de z definido
         else:
-            C_pooled = enc_out.mean(dim=1)  # (B, d_model)
+            C = enc_out  # (B, d_model)
             if hasattr(self.transformer, "prior_mu") and hasattr(self.transformer, "prior_logvar"):
-                prior_mu = self.transformer.prior_mu(C_pooled)
-                prior_logvar = self.transformer.prior_logvar(C_pooled)
+                C = enc_out # (batch, d_model)
+                prior_mu, prior_logvar = self.prior(C)
+                # clamp para evitar valores extremos
+                prior_logvar = prior_logvar.clamp(-12., 5.)
                 z = self.transformer.reparameterize(prior_mu, prior_logvar)  # (B, latent_dim)
             else:
                 z = torch.randn(B, self.latent_dim, device=device, dtype=dtype)  # fallback

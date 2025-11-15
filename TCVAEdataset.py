@@ -65,11 +65,11 @@ NORMALIZATION_RANGES = {
     # Features 7-13: Amplitudes (MIDI Velocity)
     'amp': {'min': 0.0, 'max': 127.0},
     # Features 14-17: Metrônomos (ms)
-    'metro': {'min': 100.0, 'max': 8000.0}, # 
+    'metro': {'min': 100.0, 'max': 4083.56}, # 
     # Feature 18: Grain Size (ms)
-    'grain': {'min': 50.0, 'max': 1500.0}, # 
+    'grain': {'min': 50.0, 'max': 243}, # 
     # Feature 19: Âmbito
-    'ambito': {'min': 10, 'max': 100}
+    'ambito': {'min': 10, 'max': 96.18}
 }
 
 # Cria tensores com os valores min/max para normalização
@@ -473,94 +473,108 @@ def get_process_params_for_label(seed: int, folder_name: str, duration_factor: f
         is_sparse = True
         is_contracted = True
         is_noisy = True
+        metro_min, metro_max = 135.3, 452.7; grain_min, grain_max = 50, 123; ambito_min, ambito_max = 10, 21
         print(f"  Classe '{folder_name}': Mapeada para Densa + Contraída")
 
     elif 'crescendo' in folder_name: 
         is_sparse = True
         is_dilated = True
         is_evolutive = True
+        metro_min, metro_max = 442.84, 1230.0; grain_min, grain_max = 50, 75.34; ambito_min, ambito_max = 10, 43
         print(f"  Classe '{folder_name}': Mapeada para Rarefeita + Dilatada") 
 
     elif 'crescendo_to_decrescendo' in folder_name: 
         is_sparse = True
         is_contracted = True
         is_evolutive = True
+        metro_min, metro_max = 442.84, 847.23; grain_min, grain_max = 63.87, 75.34; ambito_min, ambito_max = 10, 64.73
         print(f"  Classe '{folder_name}': Mapeada para Rarefeita + Contraída")
 
     elif 'decrescendo' in folder_name: 
         is_dense = True
         is_dilated = True
         is_evolutive = True
+        metro_min, metro_max = 723.54, 1645.43; grain_min, grain_max = 74.85, 203; ambito_min, ambito_max = 10, 15.64
         print(f"  Classe '{folder_name}': Mapeada para Densa + Dilatada")
 
     elif 'flatterzunge' in folder_name: 
         is_dense = True
         is_contracted = True
         is_alure = True
+        metro_min, metro_max = 236.74, 874.83; grain_min, grain_max = 50, 94.65; ambito_min, ambito_max = 10, 78.21
         print(f"  Classe '{folder_name}': Mapeada para Densa + Contraída")
 
     elif 'flatterzunge_to_ordinario' in folder_name: 
         is_dense = True
         is_dilated = True
         is_evolutive = True
+        metro_min, metro_max = 123.9, 2394.0; grain_min, grain_max = 50, 45; ambito_min, ambito_max = 10, 37.4
         print(f"  Classe '{folder_name}': Mapeada para Densa + Dilatada")  
 
     elif 'jet_whistle' in folder_name: 
         is_dense = True
         is_dilated = True
         is_noisy = True 
+        metro_min, metro_max = 347, 1574.75; grain_min, grain_max = 50, 200; ambito_min, ambito_max = 10, 85.34
         print(f"  Classe '{folder_name}': Mapeada para Densa + Dilatada")
 
     elif 'multiphonics' in folder_name: 
         is_sparse = True
         is_dilated = True
         is_alure = True
+        metro_min, metro_max = 100, 3849; grain_min, grain_max = 50, 77; ambito_min, ambito_max = 10, 32.4
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + Dilatada")
 
     elif 'ordinario' in folder_name: 
         is_sparse = True
         is_contracted = True
         is_alure = True
+        metro_min, metro_max = 847.36, 2656.55; grain_min, grain_max = 50, 95; ambito_min, ambito_max = 10, 94.12
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + Contraída")
 
     elif 'ordinario_to_flatterzunge' in folder_name: 
         is_dense = True
         is_dilated = True
         is_evolutive = True
+        metro_min, metro_max = 1014.6, 4083.56; grain_min, grain_max = 50, 66; ambito_min, ambito_max = 10, 55.32
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + dilatada")
 
     elif 'sforzato' in folder_name: 
         is_sparse = True
         is_dilated = True
         is_impulse = True
+        metro_min, metro_max = 1584.6, 3946.23; grain_min, grain_max = 50, 156; ambito_min, ambito_max = 10, 27
         print(f"  Classe '{folder_name}': Mapeada para rarefeita + dilatada")
 
     elif 'staccato' in folder_name: 
         is_dense = True
         is_dilated = True
         is_impulse = True
+        metro_min, metro_max = 746, 4536.73; grain_min, grain_max = 50, 243; ambito_min, ambito_max = 10, 46.87
         print(f"  Classe '{folder_name}': Mapeada para densa + dilatada")
 
     elif 'tongue_ram-pizz' in folder_name: 
         is_dense = True
         is_contracted = True
         is_impulse = True
+        metro_min, metro_max = 234.56, 3173.8; grain_min, grain_max = 50, 172; ambito_min, ambito_max = 10, 96.18
         print(f"  Classe '{folder_name}': Mapeada para densa + contraída")
 
     elif 'trill' in folder_name: 
         is_dense = True
         is_dilated = True
         is_alure = True
+        metro_min, metro_max = 154, 236; grain_min, grain_max = 50, 88.5; ambito_min, ambito_max = 10, 13.4
         print(f"  Classe '{folder_name}': Mapeada para densa + dilatada")
     
     # Define ranges baseados nas heurísticas
     # metro_min, metro_max = 100, 5000; grain_min, grain_max = 50, 1500; ambito_min, ambito_max = -100, 100
-    if is_impulse: metro_min, metro_max = 100, 700
-    elif is_noisy: metro_min, metro_max = 1500, 3000
-    elif is_alure: metro_min, metro_max = 3000, 6000
-    elif is_evolutive: metro_min, metro_max = 5500, 8000
-    if is_dilated: grain_min, grain_max = 500, 1500; ambito_min, ambito_max = 10, 100
-    elif is_contracted: grain_min, grain_max = 50, 500; ambito_min, ambito_max = 65, 100
+    # if is_impulse: metro_min, metro_max = 100, 700
+    # elif is_noisy: metro_min, metro_max = 1500, 3000
+    # elif is_alure: metro_min, metro_max = 3000, 6000
+    # elif is_evolutive: metro_min, metro_max = 5500, 8000
+    # if is_dilated: grain_min, grain_max = 500, 1500; ambito_min, ambito_max = 10, 100
+    # elif is_contracted: grain_min, grain_max = 50, 500; ambito_min, ambito_max = 65, 100
 
     gen_var = torch.Generator(); gen_var.manual_seed(seed + 42)
 

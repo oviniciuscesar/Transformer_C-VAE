@@ -391,6 +391,64 @@ class Decoder(nn.Module):
         for layer in self.layers:
             x = layer(x, enc_out, look_ahead_mask, padding_mask)
         return x  # (batch, Lt, d_model)
+    
+
+# --- Prior ----
+class Prior(nn.Module):
+    def __init__(self, d_model, latent_dim, prior_d_ff=128, dropout=0.1):
+        super().__init__()
+
+        self.norm = nn.LayerNorm(d_model)
+        self.ff = nn.Sequential(
+            nn.Linear(d_model, prior_d_ff),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(prior_d_ff, d_model),
+        )
+
+        self.mu = nn.Linear(d_model, latent_dim)
+        self.logvar = nn.Linear(d_model, latent_dim)
+
+        # inicialização dos pesos do prior d
+        nn.init.xavier_uniform_(self.mu.weight, gain=0.1)
+        nn.init.zeros_(self.mu.bias)
+        nn.init.xavier_uniform_(self.logvar.weight, gain=0.1)
+        nn.init.constant_(self.logvar.bias, -3.0)
+
+    def forward(self, context): 
+        """
+        context: (B, T, d_model)
+        """
+        x = self.norm(context)
+        x = x + self.ff(x)               # pequeno resblock
+        x = x.mean(dim=1)                # pooling temporal
+        return self.mu(x), self.logvar(x)
+
+# class Prior(nn.Module):
+#     def __init__(self, d_model, latent_dim, num_heads=2, prior_d_ff=128, dropout=0.05):
+#         super().__init__()
+
+#         self.attn = MultiHeadAttention(d_model, num_heads, dropout)
+#         self.norm1 = nn.LayerNorm(d_model)
+
+#         self.ff = FeedForward(d_model, prior_d_ff, dropout)
+#         self.norm2 = nn.LayerNorm(d_model)
+
+#         self.mu = nn.Linear(d_model, latent_dim)
+#         self.logvar = nn.Linear(d_model, latent_dim)
+
+#     def forward(self, context):
+#         x = context
+
+#         attn_out = self.attn(x, x, x)
+#         x = self.norm1(x + attn_out)
+
+#         ff_out = self.ff(x)
+#         x = self.norm2(x + ff_out)
+
+#         pooled = x.mean(dim=1)
+#         return self.mu(pooled), self.logvar(pooled)
+
 
 # --- Transformer C-VAE Model ---
 class TransformerCVAE(nn.Module):
@@ -454,15 +512,10 @@ class TransformerCVAE(nn.Module):
         )
         
         # prior treinável p(z|C) ~ N(prior_mu(C), prior_logvar(C)) para uso na inferência
-        self.prior_mu = nn.Linear(d_model, latent_dim)
-        self.prior_logvar = nn.Linear(d_model, latent_dim)
-        
-        # inicialização dos pesos do prior
-        nn.init.xavier_uniform_(self.prior_mu.weight, gain=0.1)
-        nn.init.zeros_(self.prior_mu.bias)
-        nn.init.xavier_uniform_(self.prior_logvar.weight, gain=0.1)
-        nn.init.constant_(self.prior_logvar.bias, -3.0)
-
+        # self.prior_mu = nn.Linear(d_model, latent_dim)
+        # self.prior_logvar = nn.Linear(d_model, latent_dim)
+        # prior mais equilibrado
+        self.prior = Prior(d_model, latent_dim, prior_d_ff=vaencoder_d_ff, dropout=encoder_dropout)
 
         # self.fc_mu = nn.Linear(d_model, latent_dim)
         # self.fc_logvar = nn.Linear(d_model, latent_dim)
@@ -539,13 +592,15 @@ class TransformerCVAE(nn.Module):
         posterior_mu, posterior_logvar = self.vae_encoder(tgt, C, tgt_padding_mask)
 
         #2.1 prior p(z | C)  <- treinável a partir do contexto C
-        C_pooled = C.mean(dim=1)  # (B, d_model)
-        prior_mu = self.prior_mu(C_pooled)          # (B, latent_dim)
-        prior_logvar = self.prior_logvar(C_pooled)  # (B, latent_dim)
-
-        # clamp para evitar valores extremos
-        posterior_logvar = posterior_logvar.clamp(-12., 5.)
+        # C_pooled = C.mean(dim=1)  # (B, d_model)
+        # prior_mu = self.prior_mu(C_pooled)          # (B, latent_dim)
+        # prior_logvar = self.prior_logvar(C_pooled)  # (B, latent_dim)
+        prior_mu, prior_logvar = self.prior(C)
         prior_logvar = prior_logvar.clamp(-12., 5.)
+
+        # # clamp para evitar valores extremos
+        # posterior_logvar = posterior_logvar.clamp(-12., 5.)
+        # prior_logvar = prior_logvar.clamp(-12., 5.)
 
         # 3. Amostragem do espaço latente
         z = self.reparameterize(posterior_mu, posterior_logvar) # (batch, latent_dim)
