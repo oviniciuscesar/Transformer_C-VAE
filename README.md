@@ -18,89 +18,15 @@
 
 - **Decoder:** Concatena `z` (latente) expandido com `tgt`. Projeta (`target_features` + `latent_dim`) → `d_model`. Adiciona positional encoding. Pilha de `DecoderLayer`.å
 
-### Transformer C-VAE:
+### 2. Transformer C-VAE:
 
-- **Conditional Encoder:** Processa `entrada → contexto C`.
+- **1. Encoder Condicional:** Processa `entrada → contexto C`.
+  <img src= "img/encoderc.png" width="300" alt="Arquitetura do Decoder Condicional" />
 
-- **Variational Encoder:** Processa `tgt e C → mu e logvar`.
+- **2. Encoder Variacional:** Processa `tgt e C → mu e logvar`.
+  <img src= "img/encoderv.png" width="500" alt="Arquitetura do Decoder Condicional" />
 
 - **Reparametrização:** `(mu, logvar) → z`.
 
-- **Decoder:** Recebe `tgt_in, z, C` e gera representações.
-
-- **Camada linear:** Projeta: `d_model → target_features`.
-
-- **Saída:** `(predictions, mu, logvar)`.
-
-### 2. Diagrama da Arquitetura (Fluxo de Dados)
-
-O diagrama abaixo ilustra o fluxo de dados (inputs src e tgt) através do modelo para gerar as predições finais, mu e logvar.
-
-```mermaid
-graph TD
-    src["Input: Sequência Fonte (src)"]
-    tgt["Input: Sequência Alvo (tgt)"]
-    tgt_in["Input: Alvo deslocado (último passo excluído) (tgt_in)"]
-
-    subgraph "1. Encoder Condicional (Gera Contexto C)"
-        direction TB
-        src --> CE["projeção da entrada com camada linear (src)"]
-        CE --> pe_enc_cond["Add Positional Encoding"]
-        pe_enc_cond --> enc_stack_cond["Pilha de Encoder e Self-Attention"]
-        enc_stack_cond --> C["Contexto (C)"]
-    end
-
-    subgraph "2. Encoder Variacional (Gera mu e logvar)"
-        direction TB
-        C --> pool["média do contexto e concatena com tgt"]
-        enc_proj_vae --> pe_enc_vae["Add Positional Encoding"]
-        pe_enc_vae --> enc_stack_vae["Pilha de EncoderLayers\nSelf-Attention"]
-        enc_stack_vae --> pool["Average Pooling Temporal"]
-        pool --> fc_mu["Linear -> mu"]
-        pool --> fc_logvar["Linear -> logvar"]
-    end
-
-    subgraph "3. Amostragem Latente (Reparametrização)"
-        direction LR
-        fc_mu --> rep["z = reparameterize(mu, logvar)"]
-        fc_logvar --> rep
-        rep --> z_exp["Expandir z\n(B, L_tgt, latent_dim)"]
-    end
-
-    subgraph "4. Decoder (Gera Saída)"
-        direction TB
-        subgraph "Preparação da Entrada do Decoder"
-            direction LR
-            tgt_in --> concat["Concat"]
-            z_exp --> concat
-        end
-        concat --> dec_proj["Projeção de Entrada\n(d_model)"]
-        dec_proj --> pe_dec["Add Positional Encoding"]
-        pe_dec --> dec_stack["Pilha de DecoderLayers\n1. Masked Self-Attention\n2. Cross-Attention"]
-
-        C --> dec_stack
-
-        dec_stack --> dec_out["Saída do Decoder\n(B, L_tgt, d_model)"]
-    end
-
-    subgraph "5. Projeção Final"
-        direction TB
-        dec_out --> final_proj["Linear -> target_features"]
-        final_proj --> preds["Predições\n(B, L_tgt, target_features)"]
-    end
-
-    subgraph "Saídas do Modelo"
-        preds
-        mu
-        logvar
-    end
-
-    classDef inputs fill:#D6EAF8,stroke:#5DADE2,stroke-width:2px;
-    class src,tgt,tgt_in inputs;
-
-    classDef outputs fill:#D5F5E3,stroke:#58D68D,stroke-width:2px;
-    class preds,mu,logvar outputs;
-
-    classDef context fill:#FCF3CF,stroke:#F7DC6F,stroke-width:2px;
-    class C,z_exp context;
-```
+- **3. Decoder Generativo:** Recebe `tgt_in, z, C` e gera representações.
+  <img src= "img/decoderg.png" width="400" alt="Arquitetura do Decoder Condicional" />

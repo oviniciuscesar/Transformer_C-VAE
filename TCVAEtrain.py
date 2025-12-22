@@ -26,16 +26,16 @@ DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 # arquitetura do modelo
 # --- encoder, vae encoder ---
 ENCODER_LAYERS = 4
-VAE_LAYERS = 1
+VAE_LAYERS = 2
 ENCODER_D_FF = 256
 VAE_D_FF = 256
 NUM_HEADS = 4
 ENCODER_DROPOUT = 0.05
 VAE_DROPOUT = 0.05
  
-LATENT_DIM = 128
+LATENT_DIM = 64
 D_MODEL = 128
-
+ 
 #--- decoder ---
 DECODER_LAYERS = 2
 DECODER_HEADS = 4
@@ -50,13 +50,13 @@ SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 10 # número máximo de passos temporais
 
 # parâmetros de treinamento
-EPOCHS = 500
-BATCH_SIZE = 512
+EPOCHS = 120
+BATCH_SIZE = 256
 LR = 1e-3
-CONDITION_DROPOUT_RATE = 0 # taxa de dropout para a condição (SRC)
+CONDITION_DROPOUT_RATE = 0.2 # taxa de dropout para a condição (SRC)
 BETA_START_EPOCH = 20
 BETA_WARMUP_EPOCHS = 80
-BETA_MAX = 0
+BETA_MAX = 0.01
 FREE_BITS_PER_DIM = 0.05 # nats por dimensão latente (serve para permitir mais informação no latente)
 LATENT_ACTIVE_THRESHOLD = 0.001  # limiar para considerar dimensão ativa
 
@@ -258,7 +258,8 @@ def train_one_epoch(dataloader: DataLoader, model: torch.nn.Module, optimizer: t
 
 
         # tgt_real: (batch, SEQ_LEN-1, TARGET_FEATURES)
-        tgt_real = tgt[:, 1:, :]     
+        # tgt_real = tgt[:, 1:, :] 
+        tgt_real = tgt # alterado para reconstruir toda a sequência, já que o SOS foi adicionado internamente 
 
         optimizer.zero_grad()
 

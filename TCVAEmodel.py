@@ -448,7 +448,7 @@ class Prior(nn.Module):
 
 #         pooled = x.mean(dim=1)
 #         return self.mu(pooled), self.logvar(pooled)
-
+ 
 
 # --- Transformer C-VAE Model ---
 class TransformerCVAE(nn.Module):
@@ -605,9 +605,16 @@ class TransformerCVAE(nn.Module):
         # 3. Amostragem do espaço latente
         z = self.reparameterize(posterior_mu, posterior_logvar) # (batch, latent_dim)
 
+        # Cria o token SOS (zeros) com mesmo tipo e device do tgt (para compatibilidade com o wrapper)
+        sos_token = torch.zeros(tgt.size(0), 1, tgt.size(2), device=tgt.device)
+
         # 4. Preparação da entrada do Decoder (Teacher Forcing): remove o último passo de tempo de tgt para o modelo prever o próximo passo
         # (batch, Lt, target_features) -> (batch, Lt-1, target_features)
-        tgt_in = tgt[:, :-1, :]
+        # tgt_in = tgt[:, :-1, :]
+        
+        #  Concatena SOS no início e remove o último frame do original
+        # Entrada: [SOS, F0, F1, ..., F8] (Total 10 frames)
+        tgt_in = torch.cat([sos_token, tgt[:, :-1, :]], dim=1)
         
         # Cria máscara causal para o decoder
         look_ahead_mask = self._create_look_ahead_mask(tgt_in.size(1), tgt.device)
