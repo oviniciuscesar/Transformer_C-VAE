@@ -529,11 +529,11 @@ class TransformerCVAE(nn.Module):
         # 4. Camada final (camada linear para projetar d_model -> target_features)
         # self.final_projection = nn.Linear(d_model, target_features)
         self.final_projection = nn.Sequential(
-            # nn.LayerNorm(d_model),
+            nn.LayerNorm(d_model),
             nn.Linear(d_model, target_features),
             # nn.GELU(),
             # nn.Dropout(final_proj_dropout),
-            # nn.Linear(d_model, target_features)
+            # nn.Linear(d_model//2, target_features)
         )
 
         # Inicialização suave para não saturar o Tanh

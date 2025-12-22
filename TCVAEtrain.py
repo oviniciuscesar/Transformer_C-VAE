@@ -25,23 +25,23 @@ DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 # arquitetura do modelo
 # --- encoder, vae encoder ---
-ENCODER_LAYERS = 3
+ENCODER_LAYERS = 4
 VAE_LAYERS = 1
 ENCODER_D_FF = 256
-VAE_D_FF = 128
+VAE_D_FF = 256
 NUM_HEADS = 4
-ENCODER_DROPOUT = 0.15
+ENCODER_DROPOUT = 0.05
 VAE_DROPOUT = 0.05
-
-LATENT_DIM = 32
+ 
+LATENT_DIM = 128
 D_MODEL = 128
 
 #--- decoder ---
-DECODER_LAYERS = 1
-DECODER_HEADS = 2
-DECODER_D_FF = 64
-DECODER_DROPOUT = 0.3
-FINAL_PROJ_DROPOUT = 0.2
+DECODER_LAYERS = 2
+DECODER_HEADS = 4
+DECODER_D_FF = 128
+DECODER_DROPOUT = 0.1
+FINAL_PROJ_DROPOUT = 0.05
 
 # tamanho das entradas/saídas
 INPUT_FEATURES = 80  # features de entrada
@@ -50,14 +50,14 @@ SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 10 # número máximo de passos temporais
 
 # parâmetros de treinamento
-EPOCHS = 150
-BATCH_SIZE = 256
-LR = 5e-4
+EPOCHS = 500
+BATCH_SIZE = 512
+LR = 1e-3
 CONDITION_DROPOUT_RATE = 0 # taxa de dropout para a condição (SRC)
 BETA_START_EPOCH = 20
-BETA_WARMUP_EPOCHS = 120
-BETA_MAX = 0.15
-FREE_BITS_PER_DIM = 0.05
+BETA_WARMUP_EPOCHS = 80
+BETA_MAX = 0
+FREE_BITS_PER_DIM = 0.05 # nats por dimensão latente (serve para permitir mais informação no latente)
 LATENT_ACTIVE_THRESHOLD = 0.001  # limiar para considerar dimensão ativa
 
 
