@@ -31,7 +31,8 @@ FLUTE_DIR = os.path.join(DIRECTORY, "Flute")
 # AUDIO_PATH = os.path.join(DIRECTORY, 'Flute/jet_whistle/Fl-jet_wh-N-N-N-N.wav')
 # AUDIO_PATH = os.path.join(DIRECTORY, 'Flute/ordinario/Fl-ord-A#q6-ff-N-N.wav')
 AUDIO_PATH = os.path.join(DIRECTORY, 'Flute/crescendo_to_decrescendo/Fl-cre_dec-B3-ppmfpp-N-N.wav')
-RUN_BATCH_PER_CLASS = True  # defina True para rodar 1 exemplo aleatório por classe
+RUN_BATCH_PER_CLASS = False  # defina True para rodar 1 exemplo aleatório por classe
+LATENT_TEST = True
 
 # ====== Parâmetros do modelo/dados ======
 N_FRAMES = 10       # frames do melspectrograma
@@ -47,6 +48,7 @@ WINDOW_TYPE = 'HANN'
 MEL_MODE = cc.MelNormMode.ENERGY_POWER if HAS_CC else None  # só CC usa
 
 # Targets
+STEPS = 1           # passos de saída do modelo
 N_PITCHES = 7
 N_AMPS = 7
 N_TEXTURE_PARAMS = 6  # 4 metros + 1 grão + 1 âmbito
@@ -219,6 +221,16 @@ def run_inference_on_path(model, path: str) -> torch.Tensor:
     denorm = denormalize_output(out.squeeze(0).cpu())
     return denorm  # [steps, 20]
 
+def run_inference_on_path_z(model, path: str) -> torch.Tensor:
+    audio = load_audio(path, SAMPLE_RATE)
+    mel_tensor = compute_mel(audio, N_FRAMES)  # [1, N_FRAMES*N_MELS]
+    z_dummy = torch.randn((1, 64), dtype=torch.float32) # ajuste o tamanho conforme o modelo
+    with torch.no_grad():
+        model.latent(z_dummy)  # define o vetor latente
+        out = model.forwardz(mel_tensor)  # wrapper usa forward() aleatório com z~N(0,I)
+    denorm = denormalize_output(out.squeeze(0).cpu())
+    return denorm  # [steps, 20]
+
 def print_denorm_result(denorm: torch.Tensor, cls: str, fname: str, step: int = 0):
     print(f"\n=== Classe: {cls} | Arquivo: {fname} ===")
     print(f"---------- step: {step} -----------")
@@ -251,9 +263,27 @@ def single_test():
     cls = Path(AUDIO_PATH).parent.name
     print_denorm_result(denorm, cls=cls, fname=os.path.basename(AUDIO_PATH), step=0)
 
+
+def latent_test():
+    """
+    Teste extra: gera uma saída a partir de um vetor latente fixo.
+    Útil para depuração.
+    """
+    if not os.path.isfile(AUDIO_PATH):
+        print(f"Arquivo de áudio não encontrado: {AUDIO_PATH}")
+        return
+    model = load_scripted_model()
+    denorm = run_inference_on_path_z(model, AUDIO_PATH)
+    cls = Path(AUDIO_PATH).parent.name
+    print_denorm_result(denorm, cls=cls, fname=os.path.basename(AUDIO_PATH), step=2)
+
 # ====== Main ======
 if __name__ == "__main__":
     if RUN_BATCH_PER_CLASS:
         batch_test_random_examples()
     else:
         single_test()
+    if LATENT_TEST:
+        latent_test()
+    else:
+        print("\nLatent test desativado.")

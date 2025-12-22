@@ -289,15 +289,15 @@ def generate_pitches_amps_from_class(seed, class_name, brightness_factor, durati
         'crescendo': {'base_pitch': 7600, 'pitch_range': 856, 'base_amp': 80, 'amp_range': 40},
         'crescendo_to_decrescendo': {'base_pitch': 6700, 'pitch_range': 500, 'base_amp': 85, 'amp_range': 37},
         'decrescendo': {'base_pitch': 7500, 'pitch_range': 500, 'base_amp': 80, 'amp_range': 20},
-        'flatterzunge': {'base_pitch': 7400, 'pitch_range': 900, 'base_amp': 80, 'amp_range': 45},
+        'flatterzunge': {'base_pitch': 7400, 'pitch_range': 900, 'base_amp': 105, 'amp_range': 45},
         'flatterzunge_to_ordinario': {'base_pitch': 7500, 'pitch_range': 700, 'base_amp': 80, 'amp_range': 25},
-        'jet_whistle': {'base_pitch': 9000, 'pitch_range': 1000, 'base_amp': 60, 'amp_range': 30},
-        'multiphonics': {'base_pitch': 7200, 'pitch_range': 1200, 'base_amp': 70, 'amp_range': 25},
+        'jet_whistle': {'base_pitch': 7200, 'pitch_range': 1000, 'base_amp': 108, 'amp_range': 30},
+        'multiphonics': {'base_pitch': 7200, 'pitch_range': 1200, 'base_amp': 110, 'amp_range': 25},
         'ordinario': {'base_pitch': 7600, 'pitch_range': 400, 'base_amp': 90, 'amp_range': 15},
         'ordinario_to_flatterzunge': {'base_pitch': 7500, 'pitch_range': 700, 'base_amp': 80, 'amp_range': 25},
         'sforzato': {'base_pitch': 7600, 'pitch_range': 625, 'base_amp': 80, 'amp_range': 30},
-        'staccato': {'base_pitch': 7600, 'pitch_range': 700, 'base_amp': 80, 'amp_range': 20},
-        'tongue_ram-pizz': {'base_pitch': 8500, 'pitch_range': 800, 'base_amp': 75, 'amp_range': 30},
+        'staccato': {'base_pitch': 7675, 'pitch_range': 700, 'base_amp': 95, 'amp_range': 20},
+        'tongue_ram-pizz': {'base_pitch': 7500, 'pitch_range': 800, 'base_amp': 75, 'amp_range': 30},
         'trill': {'base_pitch': 7800, 'pitch_range': 600, 'base_amp': 80, 'amp_range': 30},
     }
     
@@ -406,15 +406,16 @@ def get_temporal_texture_params(seed, folder_name, duration_factor,
 
 # --- Funções de Geração de metros ---
 def _generate_metros(seed: int, min_ms: float, max_ms: float, entropy_factor: float = 0.0, variability: float = 0.0) -> torch.Tensor:
-    gen = torch.Generator(); gen.manual_seed(seed) 
-    gen_rand = torch.Generator(); gen_rand.manual_seed(seed + 1000)
-    gen_noise = torch.Generator(); gen_noise.manual_seed(int(seed) + 2000)
+    gen = torch.Generator(device=DEVICE)
+    gen.manual_seed(seed) 
+    gen_rand = torch.Generator(device=DEVICE); gen_rand.manual_seed(seed + 1000)
+    gen_noise = torch.Generator(device=DEVICE); gen_noise.manual_seed(int(seed) + 2000)
 
-    base_h = torch.rand(1, generator=gen) * (max_ms - min_ms) + min_ms
+    base_h = torch.rand(1, generator=gen, device=DEVICE) * (max_ms - min_ms) + min_ms
     m1_h, m2_h, m3_h, m4_h = base_h, base_h * 1.5, base_h * 2.0, base_h * 0.75
-    harmonic_metros = torch.tensor([m1_h.item(), m2_h.item(), m3_h.item(), m4_h.item()])
+    harmonic_metros = torch.tensor([m1_h.item(), m2_h.item(), m3_h.item(), m4_h.item()], device=DEVICE)
 
-    random_metros = torch.rand(4, generator=gen_rand) * (max_ms - min_ms) + min_ms
+    random_metros = torch.rand(4, generator=gen_rand, device=DEVICE) * (max_ms - min_ms) + min_ms
     
     factor = float(max(0.0, min(1.0, float(entropy_factor))))
     blended = (1.0 - factor) * harmonic_metros + factor * random_metros
@@ -423,7 +424,7 @@ def _generate_metros(seed: int, min_ms: float, max_ms: float, entropy_factor: fl
     v = float(max(0.0, min(1.0, float(variability))))
     if v > 0.0:
         sigma = v * max_ms - v * min_ms
-        noise = torch.randn(4, generator=gen_noise, dtype=torch.float32) * sigma
+        noise = torch.randn(4, generator=gen_noise, device=DEVICE) * sigma
         final_metros = blended + noise
     else:
         final_metros = blended
@@ -434,7 +435,8 @@ def _generate_metros(seed: int, min_ms: float, max_ms: float, entropy_factor: fl
 #--- Função de Geração de Grão e Âmbito ---
 def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito_min: float, ambito_max: float,
                            duration_factor: float = 0.5, brightness_factor: float = 0.5, variability: float = 0.5) -> torch.Tensor:
-    gen = torch.Generator(); gen.manual_seed(seed + 1)
+    gen = torch.Generator(device=DEVICE) 
+    gen.manual_seed(seed + 1)
 
     # Clamp factors
     d_f = float(max(0.0, min(1.0, duration_factor)))
@@ -446,7 +448,7 @@ def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito
     grain_range = max(grain_max - grain_min, 1e-6)
     det_grain = grain_base + (d_f - 0.5) * grain_range  # deslocamento em ±0.5*range
     sigma_grain = v_f * grain_range
-    noise_grain = torch.randn(1, generator=gen).item() * sigma_grain
+    noise_grain = torch.randn(1, generator=gen, device=DEVICE).item() * sigma_grain
     final_grain = float(torch.clamp(torch.tensor(det_grain + noise_grain), grain_min, grain_max).item())
 
     # Âmbito: (centro + deslocamento + ruído)
@@ -454,7 +456,7 @@ def _generate_grain_ambito(seed: int, grain_min: float, grain_max: float, ambito
     ambito_range = ambito_max - ambito_min if (ambito_max - ambito_min) > 0 else 0.1
     det_ambito = ambito_base + (b_f - 0.5) * ambito_range
     sigma_ambito = v_f * ambito_range
-    noise_ambito = torch.randn(1, generator=gen).item() * sigma_ambito
+    noise_ambito = torch.randn(1, generator=gen, device=DEVICE).item() * sigma_ambito
     final_ambito = float(torch.clamp(torch.tensor(det_ambito + noise_ambito), ambito_min, ambito_max).item())
    
     return torch.tensor([final_grain, final_ambito], dtype=torch.float32, device=DEVICE)
@@ -550,21 +552,21 @@ def get_process_params_for_label(seed: int, folder_name: str, duration_factor: f
         is_dense = True
         is_dilated = True
         is_impulse = True
-        metro_min, metro_max = 746, 4536.73; grain_min, grain_max = 50, 243; ambito_min, ambito_max = 10, 46.87
+        metro_min, metro_max = 200, 646; grain_min, grain_max = 50, 243; ambito_min, ambito_max = 10, 46.87
         print(f"  Classe '{folder_name}': Mapeada para densa + dilatada")
 
     elif 'tongue_ram-pizz' in folder_name: 
         is_dense = True
         is_contracted = True
         is_impulse = True
-        metro_min, metro_max = 234.56, 3173.8; grain_min, grain_max = 50, 172; ambito_min, ambito_max = 10, 96.18
+        metro_min, metro_max = 154.56, 473.8; grain_min, grain_max = 50, 172; ambito_min, ambito_max = 10, 96.18
         print(f"  Classe '{folder_name}': Mapeada para densa + contraída")
 
     elif 'trill' in folder_name: 
         is_dense = True
         is_dilated = True
         is_alure = True
-        metro_min, metro_max = 154, 236; grain_min, grain_max = 50, 88.5; ambito_min, ambito_max = 10, 13.4
+        metro_min, metro_max = 854, 2036; grain_min, grain_max = 50, 88.5; ambito_min, ambito_max = 10, 13.4
         print(f"  Classe '{folder_name}': Mapeada para densa + dilatada")
     
     # Define ranges baseados nas heurísticas
@@ -576,11 +578,12 @@ def get_process_params_for_label(seed: int, folder_name: str, duration_factor: f
     # if is_dilated: grain_min, grain_max = 500, 1500; ambito_min, ambito_max = 10, 100
     # elif is_contracted: grain_min, grain_max = 50, 500; ambito_min, ambito_max = 65, 100
 
-    gen_var = torch.Generator(); gen_var.manual_seed(seed + 42)
+    gen_var = torch.Generator(device=DEVICE)
+    gen_var.manual_seed(seed + 42)
 
     MIN_VARIABILITY = 0.1 
     MAX_VARIABILITY = 0.7
-    sampled_variability = torch.rand(1, generator=gen_var).item() * (MAX_VARIABILITY - MIN_VARIABILITY) + MIN_VARIABILITY
+    sampled_variability = torch.rand(1, generator=gen_var, device=DEVICE).item() * (MAX_VARIABILITY - MIN_VARIABILITY) + MIN_VARIABILITY
 
     # Gera targets de textura
     metros_tensor = _generate_metros(seed, metro_min, metro_max, entropy_factor=entropy_factor, variability=sampled_variability) 
@@ -596,6 +599,8 @@ def create_dataset(csv_path, audio_root, save_dir, hop_step=1):
     Lê o CSV, processa áudio, extrai janelas (src), gera alvos (tgt) HÍBRIDOS e NORMALIZA.
     """
     print(f"Usando dispositivo: {DEVICE}")
+    print(f"MPS disponível: {torch.backends.mps.is_available()}")
+    print(f"MPS built: {torch.backends.mps.is_built()}")
     print(f"Target Features: {TARGET_FEATURES} (Pitches: {N_PITCHES}, Amps: {N_AMPS}, Textura: {N_TEXTURE_PARAMS})")
     
     # 1. Carregar CSV e normalizar durações 
