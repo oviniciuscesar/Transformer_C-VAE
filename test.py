@@ -224,7 +224,7 @@ def run_inference_on_path(model, path: str) -> torch.Tensor:
 def run_inference_on_path_z(model, path: str) -> torch.Tensor:
     audio = load_audio(path, SAMPLE_RATE)
     mel_tensor = compute_mel(audio, N_FRAMES)  # [1, N_FRAMES*N_MELS]
-    z_dummy = torch.randn((1, 64), dtype=torch.float32) # ajuste o tamanho conforme o modelo
+    z_dummy = torch.ones((1, 64), dtype=torch.float32) # ajuste o tamanho conforme o modelo
     with torch.no_grad():
         model.latent(z_dummy)  # define o vetor latente
         out = model.forwardz(mel_tensor)  # wrapper usa forward() aleatório com z~N(0,I)
@@ -276,6 +276,7 @@ def latent_test():
     denorm = run_inference_on_path_z(model, AUDIO_PATH)
     cls = Path(AUDIO_PATH).parent.name
     print_denorm_result(denorm, cls=cls, fname=os.path.basename(AUDIO_PATH), step=2)
+
 
 # ====== Main ======
 if __name__ == "__main__":

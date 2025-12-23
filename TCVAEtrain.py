@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from typing import Tuple, Optional, Dict, List
 from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 # Importa o modelo C-VAE
 from TCVAEmodel import TransformerCVAE
 
@@ -30,18 +31,18 @@ VAE_LAYERS = 2
 ENCODER_D_FF = 256
 VAE_D_FF = 256
 NUM_HEADS = 4
-ENCODER_DROPOUT = 0.05
-VAE_DROPOUT = 0.05
+ENCODER_DROPOUT = 0.1
+VAE_DROPOUT = 0.1
  
 LATENT_DIM = 64
 D_MODEL = 128
  
 #--- decoder ---
-DECODER_LAYERS = 2
+DECODER_LAYERS = 4
 DECODER_HEADS = 4
-DECODER_D_FF = 128
+DECODER_D_FF = 256
 DECODER_DROPOUT = 0.1
-FINAL_PROJ_DROPOUT = 0.05
+FINAL_PROJ_DROPOUT = 0.1
 
 # tamanho das entradas/saídas
 INPUT_FEATURES = 80  # features de entrada
@@ -50,14 +51,14 @@ SEQ_LEN = 10 # comprimento da sequência
 MAX_POS = 10 # número máximo de passos temporais
 
 # parâmetros de treinamento
-EPOCHS = 120
-BATCH_SIZE = 256
+EPOCHS = 200
+BATCH_SIZE = 128
 LR = 1e-3
-CONDITION_DROPOUT_RATE = 0.2 # taxa de dropout para a condição (SRC)
+CONDITION_DROPOUT_RATE = 0.3 # taxa de dropout para a condição (SRC)
 BETA_START_EPOCH = 20
-BETA_WARMUP_EPOCHS = 80
-BETA_MAX = 0.01
-FREE_BITS_PER_DIM = 0.05 # nats por dimensão latente (serve para permitir mais informação no latente)
+BETA_WARMUP_EPOCHS = 100
+BETA_MAX = 0.02
+FREE_BITS_PER_DIM = 0.1 # nats por dimensão latente (serve para permitir mais informação no latente)
 LATENT_ACTIVE_THRESHOLD = 0.001  # limiar para considerar dimensão ativa
 
 
@@ -395,10 +396,13 @@ def plot_losses(history: Dict[str, List[float]], save_path: str) -> Dict[str, st
 def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device: torch.device):
     # 1 - Otimizador Adam
     optimizer = Adam(model.parameters(), lr=LR)
+
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6)
    
     print(f"Iniciando Beta Annealing: Start={BETA_START_EPOCH}, Warmup={BETA_WARMUP_EPOCHS}, Max={BETA_MAX}")
     print(f"Usando Free Bits por Dimensão: {FREE_BITS_PER_DIM} nats")
     print(f"Usando Condition Dropout (SRC & TGT_in): {CONDITION_DROPOUT_RATE * 100:.0f}%")
+    print(f"LR Scheduler Ativo: ReduceLROnPlateau (Patience=10, Factor=0.5)")
 
     # Dicionário para armazenar o histórico das perdas
     history: Dict[str, List[float]] = {
@@ -410,6 +414,7 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
         'logvar_mean': [],
         'latent_var': [],
         'active_dims': [],
+        'lr': []
     }
 
     # 2 - Loop de treinamento
@@ -428,6 +433,9 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
             train_loader, model, optimizer, device, 
             current_beta, FREE_BITS_PER_DIM, CONDITION_DROPOUT_RATE)
         
+        scheduler.step(avg_recon_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+        
         kl_recon_ratio = (avg_kl_loss / avg_recon_loss) if avg_recon_loss > 0 else 0.0
         
         # Armazena as perdas no histórico
@@ -439,13 +447,14 @@ def train(train_loader: DataLoader, model: torch.nn.Module, epochs: int, device:
         history['logvar_mean'].append(avg_logvar_mean)
         history['latent_var'].append(avg_latent_var)
         history['active_dims'].append(avg_active_dims)
-
+        history['lr'].append(current_lr)
         history.setdefault('kl_per_sample', []).append(avg_kl_per_sample)
         
 
-
         # Imprime as perdas e métricas da época
-        print(f"Epoch {epoch}/{epochs}|Loss={avg_total_loss:.6f}|Recon={avg_recon_loss:.6f}|KL={avg_kl_loss:.6f}|KL/sample={avg_kl_per_sample:.4f}|KL/Recon ratio={kl_recon_ratio:.4f}|Mu={avg_mu_mean:.4f}|LogVar={avg_logvar_mean:.4f}|beta={current_beta:.4f}|Latent Var={avg_latent_var:.6f}|Active Dims={avg_active_dims:.6f}")
+        print(f"Epoch {epoch}/{epochs}|Loss={avg_total_loss:.6f}|Recon={avg_recon_loss:.6f}|KL={avg_kl_loss:.6f}|Mu={avg_mu_mean:.4f}|LogVar={avg_logvar_mean:.4f}|beta={current_beta:.4f}|Latent Var={avg_latent_var:.6f}|Active Dims={avg_active_dims:.6f}|LR={current_lr:.1e}")
+
+        # print(f"Epoch {epoch}/{epochs}|Loss={avg_total_loss:.6f}|Recon={avg_recon_loss:.6f}|KL={avg_kl_loss:.6f}|KL/sample={avg_kl_per_sample:.4f}|KL/Recon ratio={kl_recon_ratio:.4f}|Mu={avg_mu_mean:.4f}|LogVar={avg_logvar_mean:.4f}|beta={current_beta:.4f}|Latent Var={avg_latent_var:.6f}|Active Dims={avg_active_dims:.6f}|LR={current_lr:.1e}")
 
     # Após o treino, gera o gráfico
     plot_save_path = os.path.join(PLOTS_DIR, "training_metrics.png") # Salva em plots
