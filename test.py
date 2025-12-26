@@ -25,6 +25,7 @@ torch.manual_seed(SEED)
 
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(DIRECTORY, "TorchScript")
+CHECKPOINT_DIR = os.path.join(MODEL_DIR, "Checkpoints")
 FLUTE_DIR = os.path.join(DIRECTORY, "Flute")
 
 # Se quiser testar um único arquivo, defina AUDIO_PATH; caso contrário, o script roda batch por classe
@@ -33,6 +34,8 @@ FLUTE_DIR = os.path.join(DIRECTORY, "Flute")
 AUDIO_PATH = os.path.join(DIRECTORY, 'Flute/crescendo_to_decrescendo/Fl-cre_dec-B3-ppmfpp-N-N.wav')
 RUN_BATCH_PER_CLASS = False  # defina True para rodar 1 exemplo aleatório por classe
 LATENT_TEST = True
+CLASS = "aeolian"  # se None, usa AUDIO_PATH; senão, busca um arquivo aleatório dessa classe
+LATENT_CLASS = "crescendo"  # se None, usa a classe do áudio; senão, define a classe do vetor latente
 
 # ====== Parâmetros do modelo/dados ======
 N_FRAMES = 10       # frames do melspectrograma
@@ -203,7 +206,7 @@ def pick_one_wav_per_class(root_dir: str) -> dict:
 
 # ====== Execução de inferência ======
 def load_scripted_model():
-    ts_path = os.path.join(MODEL_DIR, "tc-vae.ts")
+    ts_path = os.path.join(MODEL_DIR, "tc-vaeV2.ts")
     if not os.path.isfile(ts_path):
         raise FileNotFoundError(f"Modelo TorchScript não encontrado: {ts_path}")
     model = torch.jit.load(ts_path, map_location='cpu')
@@ -221,15 +224,71 @@ def run_inference_on_path(model, path: str) -> torch.Tensor:
     denorm = denormalize_output(out.squeeze(0).cpu())
     return denorm  # [steps, 20]
 
-def run_inference_on_path_z(model, path: str) -> torch.Tensor:
+def load_centroids_dict(filepath: str, device='cpu') -> dict:
+    """
+    Lê o arquivo de texto e retorna um dicionário { 'nome_da_classe': Tensor(1, 64) }
+    """
+    centroids = {}
+    print(f"Carregando centróides de: {filepath}")
+    
+    if not os.path.exists(filepath):
+        print("AVISO: Arquivo de centróides não encontrado.")
+        return {}
+
+    with open(filepath, 'r') as f:
+        for line in f:
+            # Limpa espaços e o ponto-e-vírgula final
+            line = line.strip().replace(';', '')
+            if not line: continue
+            
+            parts = line.split(' ')
+            # Formato esperado: ID CLASSE V1 V2 ... V64
+            if len(parts) > 2:
+                class_name = parts[1]
+                # Pega do índice 2 até o fim e converte para float
+                vector_values = [float(x) for x in parts[2:]]
+                # Cria tensor (1, Latent_Dim)
+                z_tensor = torch.tensor(vector_values, dtype=torch.float32, device=device).unsqueeze(0)
+                centroids[class_name] = z_tensor
+                
+    print(f"Centróides carregados para {len(centroids)} classes.")
+    return centroids
+
+
+def run_inference_on_path_z(model, path: str, centroids: dict, target_class: str = None) -> torch.Tensor:
+    """Executa inferência usando um vetor latente específico da classe.
+    
+    Args:
+        model: modelo TorchScript carregado
+        path: caminho do arquivo de áudio
+        centroids: dicionário {classe: tensor latente} carregado do arquivo
+        target_class: nome da classe para usar o vetor latente. Se None, usa a classe do arquivo.
+    """
     audio = load_audio(path, SAMPLE_RATE)
     mel_tensor = compute_mel(audio, N_FRAMES)  # [1, N_FRAMES*N_MELS]
-    z_dummy = torch.ones((1, 64), dtype=torch.float32) # ajuste o tamanho conforme o modelo
+    
+    # Determina qual classe usar para o vetor latente
+    if target_class is not None:
+        class_name = target_class
+        print(f"Usando vetor latente da classe especificada: {class_name}")
+    else:
+        # Extrai o nome da classe do caminho (pasta pai do arquivo)
+        class_name = Path(path).parent.name
+        print(f"Usando vetor latente da classe do arquivo: {class_name}")
+    
+    # Busca o vetor latente correspondente à classe
+    if class_name in centroids:
+        z_vector = centroids[class_name]
+    else:
+        print(f"AVISO: Classe '{class_name}' não encontrada nos centróides. Usando vetor aleatório.")
+        z_vector = torch.randn((1, 64), dtype=torch.float32)
+    
     with torch.no_grad():
-        model.latent(z_dummy)  # define o vetor latente
-        out = model.forwardz(mel_tensor)  # wrapper usa forward() aleatório com z~N(0,I)
+        model.latent(z_vector)  # define o vetor latente
+        out = model.forwardz(mel_tensor)  # forward com vetor latente específico
     denorm = denormalize_output(out.squeeze(0).cpu())
     return denorm  # [steps, 20]
+
 
 def print_denorm_result(denorm: torch.Tensor, cls: str, fname: str, step: int = 0):
     print(f"\n=== Classe: {cls} | Arquivo: {fname} ===")
@@ -264,18 +323,52 @@ def single_test():
     print_denorm_result(denorm, cls=cls, fname=os.path.basename(AUDIO_PATH), step=0)
 
 
-def latent_test():
+def latent_test(target_class: str = None, latent_class: str = None):
     """
-    Teste extra: gera uma saída a partir de um vetor latente fixo.
-    Útil para depuração.
+    Teste extra: gera uma saída a partir de um vetor latente específico da classe.
+    Carrega os centróides do arquivo de texto e usa o vetor correspondente à classe do áudio.
+    
+    Args:
+        target_class: nome da classe para buscar o arquivo de áudio. Se None, usa AUDIO_PATH. 
+                     Se fornecido, busca um arquivo aleatório dessa classe.
+        latent_class: nome da classe para usar o vetor latente. Se None, usa a classe do arquivo de áudio.
     """
-    if not os.path.isfile(AUDIO_PATH):
-        print(f"Arquivo de áudio não encontrado: {AUDIO_PATH}")
+    # Carrega os centróides do arquivo
+    centroids_path = os.path.join(CHECKPOINT_DIR, "latent_centroids.txt")
+    centroids = load_centroids_dict(centroids_path)
+    
+    if not centroids:
+        print("AVISO: Nenhum centróide carregado. Verifique o arquivo de centróides.")
         return
+    
+    # Determina qual arquivo usar
+    if target_class is not None:
+        # Busca um arquivo aleatório da classe especificada
+        class_dir = os.path.join(FLUTE_DIR, target_class)
+        if not os.path.isdir(class_dir):
+            print(f"ERRO: Diretório da classe '{target_class}' não encontrado: {class_dir}")
+            return
+        
+        wavs = [f.path for f in os.scandir(class_dir) if f.is_file() and f.name.lower().endswith(".wav")]
+        if not wavs:
+            print(f"ERRO: Nenhum arquivo .wav encontrado na classe '{target_class}'")
+            return
+        
+        audio_path = random.choice(wavs)
+        print(f"Classe do áudio selecionada: {target_class}")
+        print(f"Arquivo escolhido: {os.path.basename(audio_path)}")
+    else:
+        # Usa o AUDIO_PATH definido no início do arquivo
+        if not os.path.isfile(AUDIO_PATH):
+            print(f"Arquivo de áudio não encontrado: {AUDIO_PATH}")
+            return
+        audio_path = AUDIO_PATH
+    
     model = load_scripted_model()
-    denorm = run_inference_on_path_z(model, AUDIO_PATH)
-    cls = Path(AUDIO_PATH).parent.name
-    print_denorm_result(denorm, cls=cls, fname=os.path.basename(AUDIO_PATH), step=2)
+    denorm = run_inference_on_path_z(model, audio_path, centroids, target_class=latent_class)
+    cls = Path(audio_path).parent.name
+    print_denorm_result(denorm, cls=cls, fname=os.path.basename(audio_path), step=0)
+
 
 
 # ====== Main ======
@@ -285,6 +378,5 @@ if __name__ == "__main__":
     else:
         single_test()
     if LATENT_TEST:
-        latent_test()
-    else:
+        latent_test(target_class=CLASS, latent_class=LATENT_CLASS) 
         print("\nLatent test desativado.")

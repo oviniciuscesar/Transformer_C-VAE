@@ -8,7 +8,7 @@ import seaborn as sns
 import numpy as np
 
 # ==========================================
-# ⚙️ CONFIGURAÇÕES
+# CONFIGURAÇÕES
 # ==========================================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 64
@@ -21,13 +21,13 @@ torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 # ==========================================
-# 🧩 CARREGAMENTO DOS DADOS
+# CARREGAMENTO DOS DADOS
 # ==========================================
 # Substitua pelas variáveis reais do seu dataset
 # src: tensor [N, frames, n_mels]
 # labels: tensor [N]
-data = torch.load("train_src1.pt")   # ou o nome do arquivo que você salvou
-labels = torch.load("train_labels1.pt")
+data = torch.load("train_src.pt")   # ou o nome do arquivo que você salvou
+labels = torch.load("train_labels.pt")
 
 # Flatten temporal + espectral (ex.: 10x64 → 640)
 N, T, F = data.shape
@@ -40,7 +40,7 @@ print(f"Input shape: {X.shape}, Labels: {len(y)} classes={y.unique().numel()}")
 X = (X - X.mean(0)) / (X.std(0) + 1e-8)
 
 # ==========================================
-# 🧾 DATASET SPLIT
+# DATASET SPLIT
 # ==========================================
 dataset = TensorDataset(X, y)
 n_val = int(len(dataset) * VAL_SPLIT)
@@ -51,7 +51,7 @@ train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
 # ==========================================
-# 🧠 MODELO MLP
+# MODELO MLP
 # ==========================================
 class MLPClassifier(nn.Module):
     def __init__(self, in_dim, num_classes):
@@ -75,7 +75,7 @@ num_classes = y.unique().numel()
 model = MLPClassifier(X.shape[1], num_classes).to(DEVICE)
 
 # ==========================================
-# ⚡ TREINAMENTO
+# TREINAMENTO
 # ==========================================
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=LR)
@@ -115,7 +115,7 @@ for epoch in range(EPOCHS):
     print(f"Epoch {epoch+1:02d}/{EPOCHS} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {acc:.3f}")
 
 # ==========================================
-# 📊 AVALIAÇÃO FINAL
+# AVALIAÇÃO FINAL
 # ==========================================
 model.eval()
 all_preds, all_labels = [], []

@@ -477,7 +477,7 @@ def get_process_params_for_label(seed: int, folder_name: str, duration_factor: f
         is_noisy = True
         metro_min, metro_max = 135.3, 452.7; grain_min, grain_max = 50, 123; ambito_min, ambito_max = 10, 21
         print(f"  Classe '{folder_name}': Mapeada para Densa + Contraída")
-
+ 
     elif 'crescendo' in folder_name: 
         is_sparse = True
         is_dilated = True

@@ -5,7 +5,7 @@ from tqdm import tqdm
 from TCVAEmodel import TransformerCVAE
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 # --- CONFIGURAÇÕES ---
 DEVICE = 'mps' if torch.backends.mps.is_available() else 'cpu'
@@ -17,6 +17,10 @@ CHECKPOINT_DIR = os.path.join(MODEL_DIR, "Checkpoints")
 DATA_DIR = os.path.join(DIRECTORY, "dataset") 
 PLOTS_DIR = os.path.join(DIRECTORY, "plots")
 RAW_AUDIO_DIR = "Flute" 
+
+# Fator de expansão: 2.5 garante que os vetores tenham força (~ -2.5 a +2.5)
+# similar a um vetor aleatório torch.randn()
+EXPANSION_FACTOR = 2.5
 
 os.makedirs(PLOTS_DIR, exist_ok=True)
 OUTPUT_FILE = os.path.join(CHECKPOINT_DIR, "latent_centroids.txt")
@@ -59,28 +63,27 @@ def main():
         full_labels = full_labels.squeeze()
 
     # --- SEM CONVERSÃO DB (Respeitando o treinamento Linear) ---
-    print("Usando dados RAW (Linear) conforme o treinamento...")
+    print("Usando dados RAW (Linear) para extração...")
     
-    # Verifica dimensões e transpõe se necessário (Transformer espera [Batch, Time, Feat])
+    # Verifica dimensões e transpõe se necessário [Batch, Time, Feat]
     if full_src.shape[1] == 80 and full_src.shape[2] == 10:
-        print("Ajustando dimensões [B, 80, 10] -> [B, 10, 80]")
         full_src = full_src.transpose(1, 2)
     
     unique_labels = sorted([int(x) for x in torch.unique(full_labels).tolist() if x >= 0])
     class_names = get_class_names()
 
-    centroids = {}
+    # Dicionário temporário para guardar os vetores brutos (microscópicos)
+    raw_centroids = {}
     
     with torch.no_grad():
         for label_idx in tqdm(unique_labels, desc="Extraindo Centróides"):
             indices = (full_labels == label_idx).nonzero(as_tuple=True)[0]
             if len(indices) == 0: continue
             
-            # Pega dados brutos
             class_src = full_src[indices].to(DEVICE)
             
-            # Batch processing
             z_accum = []
+            # Processa em batches
             for i in range(0, len(class_src), 512):
                 batch = class_src[i : i + 512]
                 C = model.conditional_encoder(batch, None)
@@ -91,63 +94,75 @@ def main():
             centroid = torch.mean(all_z, dim=0).numpy()
             
             name = class_names[label_idx] if label_idx < len(class_names) else f"class_{label_idx}"
-            centroids[name] = (label_idx, centroid)
+            raw_centroids[label_idx] = (name, centroid)
 
-    # Verifica variação real
-    vectors_list = [v for _, v in centroids.values()]
-    vectors_np = np.array(vectors_list)
-    std_dev = np.std(vectors_np)
-    print(f"\nDesvio Padrão dos Centróides: {std_dev:.8f}")
-    if std_dev < 1e-5:
-        print("AVISO: Variação muito pequena detectada (esperado para dados lineares).")
-        print("Os dados serão normalizados para 0-1 no gráfico e arquivo.")
+    # --- EXPANSÃO DO ESPAÇO LATENTE ---
+    print("\n--- Aplicando Expansão Estatística ---")
+    
+    # Prepara dados para o Scaler
+    # Ordena por label_idx para consistência
+    sorted_items = sorted(raw_centroids.items())
+    vectors_raw = np.array([vec for _, (_, vec) in sorted_items])
+    names_list = [name for _, (name, _) in sorted_items]
+    ids_list = [idx for idx, _ in sorted_items]
 
-    # 3. Salvar
+    std_raw = np.std(vectors_raw)
+    print(f"Desvio Padrão Original (Microscópico): {std_raw:.10f}")
+
+    # Aplica StandardScaler (Média 0, Std 1)
+    scaler = StandardScaler()
+    vectors_expanded = scaler.fit_transform(vectors_raw)
+    
+    # Aplica fator de multiplicação (Força Extra)
+    vectors_expanded = vectors_expanded * EXPANSION_FACTOR
+    
+    std_new = np.std(vectors_expanded)
+    print(f"Novo Desvio Padrão (Expandido): {std_new:.4f}")
+    print(f"Fator de Expansão aplicado: {EXPANSION_FACTOR}x (sobre Std=1)")
+
+    # 3. Salvar (Agora salvamos os vetores EXPANDIDOS)
     print(f"Salvando em {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, 'w') as f:
-        for name, (idx, vec) in sorted(centroids.items(), key=lambda x: x[1][0]):
-            vec_str = " ".join([f"{v:.8f}" for v in vec]) # Mais precisão decimal
-            f.write(f"{idx} {name} {vec_str};\n")
+        for i, idx in enumerate(ids_list):
+            name = names_list[i]
+            vec = vectors_expanded[i]
+            # Formato: ID NOME V1 V2 ...
+            vec_str = " ".join([f"{v:.6f}" for v in vec])
+            # f.write(f"{idx} {name} {vec_str};\n")
+            f.write(f"{vec_str};\n")
 
-    # 4. Plotagem (PCA Normalizado)
-    print("Gerando gráfico...")
-    names_list = []
+    # 4. Plotagem (Para o PD)
+    print("Gerando gráfico de navegação...")
     
-    # Ordena para garantir consistência
-    sorted_items = sorted(centroids.items(), key=lambda x: x[1][0])
-    names_list = [name for name, _ in sorted_items]
-    vectors_list = [vec for _, (_, vec) in sorted_items]
-    vectors_np = np.array(vectors_list)
-
+    # PCA para 2D (preserva a geometria relativa dos vetores expandidos)
     pca = PCA(n_components=2)
-    coords_pca = pca.fit_transform(vectors_np)
+    coords_pca = pca.fit_transform(vectors_expanded)
     
-    # Normalização Forçada para 0-1 (Resolve o problema da escala microscópica)
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    coords_norm = scaler.fit_transform(coords_pca)
+    # Normalização Forçada para 0-1 (Independente da expansão, o PD precisa de 0-1)
+    minmax = MinMaxScaler(feature_range=(0, 1))
+    coords_norm = minmax.fit_transform(coords_pca)
 
     plt.figure(figsize=(12, 10))
-    # Usando colormap espectral para diferenciar bem as 14 classes
     scatter = plt.scatter(coords_norm[:, 0], coords_norm[:, 1], c=range(len(names_list)), cmap='jet', s=250, edgecolors='black', alpha=0.8)
     
     for i, name in enumerate(names_list):
-        # Offset inteligente para não sobrepor
         plt.text(coords_norm[i, 0]+0.02, coords_norm[i, 1], f"{i}: {name}", fontsize=10, weight='bold')
 
-    plt.title(f"Mapa de Navegação - Espaço Latente (Linear Scale)\nVariação Original: {std_dev:.2e}", fontsize=14)
-    plt.xlabel("X (PCA 1 Normalizado)")
-    plt.ylabel("Y (PCA 2 Normalizado)")
+    plt.title(f"Mapa de Navegação Expandido (Fator {EXPANSION_FACTOR}x)\nUse estas coordenadas no [nodes]", fontsize=14)
+    plt.xlabel("X (0-1)")
+    plt.ylabel("Y (0-1)")
     plt.grid(True, linestyle='--', alpha=0.5)
     
-    plot_path = os.path.join(PLOTS_DIR, "mapa_centroides_raw.png")
+    plot_path = os.path.join(PLOTS_DIR, "mapa2d_z.png")
     plt.savefig(plot_path, dpi=150)
     print(f"\nGráfico salvo em: {plot_path}")
     
     print("\n" + "="*50)
     print("COORDENADAS PARA O PURE DATA [nodes]")
-    print("Copie estes valores para o seu objeto [nodes] (Range 0 a 1)")
+    print("(A geometria é a mesma, mas os vetores no arquivo .txt agora têm força!)")
     print("="*50)
     for i, name in enumerate(names_list):
+        # Imprime com bastante precisão
         print(f"Classe {i} ({name}): \tX = {coords_norm[i, 0]:.4f} \tY = {coords_norm[i, 1]:.4f}")
     print("="*50)
 
